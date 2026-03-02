@@ -114,4 +114,182 @@ describe("ClaudeAgentSdkRuntime auth policy", () => {
     expect(runtime.getStatus()).toBe("idle");
     await runtime.terminate({ abort: true });
   });
+
+  it("rejects expired oauth credentials for claude-agent-sdk", async () => {
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+
+    setAuthCredential(authFile, "claude-agent-sdk", {
+      type: "oauth",
+      access: "claude-oauth-token",
+      refresh: "",
+      expires: String(Date.now() - 60_000)
+    } as unknown as AuthCredential);
+
+    await expect(
+      ClaudeAgentSdkRuntime.create({
+        descriptor: createDescriptor(rootDir),
+        callbacks: {
+          onStatusChange: async () => {}
+        },
+        systemPrompt: "You are a worker",
+        tools: [],
+        authFile
+      })
+    ).rejects.toThrow("claude-agent-sdk OAuth token expired.");
+  });
+
+  it("accepts oauth credentials when expiry is a future unix-seconds timestamp", async () => {
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+
+    setAuthCredential(authFile, "claude-agent-sdk", {
+      type: "oauth",
+      access: "claude-oauth-token",
+      refresh: "",
+      expires: String(Math.floor((Date.now() + 60_000) / 1_000))
+    } as unknown as AuthCredential);
+
+    const runtime = await ClaudeAgentSdkRuntime.create({
+      descriptor: createDescriptor(rootDir),
+      callbacks: {
+        onStatusChange: async () => {}
+      },
+      systemPrompt: "You are a worker",
+      tools: [],
+      authFile
+    });
+
+    expect(runtime.getStatus()).toBe("idle");
+    await runtime.terminate({ abort: true });
+  });
+
+  it("rejects oauth credentials when expiry is an expired unix-seconds timestamp", async () => {
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+
+    setAuthCredential(authFile, "claude-agent-sdk", {
+      type: "oauth",
+      access: "claude-oauth-token",
+      refresh: "",
+      expires: String(Math.floor((Date.now() - 60_000) / 1_000))
+    } as unknown as AuthCredential);
+
+    await expect(
+      ClaudeAgentSdkRuntime.create({
+        descriptor: createDescriptor(rootDir),
+        callbacks: {
+          onStatusChange: async () => {}
+        },
+        systemPrompt: "You are a worker",
+        tools: [],
+        authFile
+      })
+    ).rejects.toThrow("claude-agent-sdk OAuth token expired.");
+  });
+
+  it("accepts oauth credentials when expiry is a future numeric unix-seconds timestamp", async () => {
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+
+    setAuthCredential(authFile, "claude-agent-sdk", {
+      type: "oauth",
+      access: "claude-oauth-token",
+      refresh: "",
+      expires: Math.floor((Date.now() + 60_000) / 1_000)
+    } as unknown as AuthCredential);
+
+    const runtime = await ClaudeAgentSdkRuntime.create({
+      descriptor: createDescriptor(rootDir),
+      callbacks: {
+        onStatusChange: async () => {}
+      },
+      systemPrompt: "You are a worker",
+      tools: [],
+      authFile
+    });
+
+    expect(runtime.getStatus()).toBe("idle");
+    await runtime.terminate({ abort: true });
+  });
+
+  it("rejects oauth credentials when expiry is an expired numeric unix-seconds timestamp", async () => {
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+
+    setAuthCredential(authFile, "claude-agent-sdk", {
+      type: "oauth",
+      access: "claude-oauth-token",
+      refresh: "",
+      expires: Math.floor((Date.now() - 60_000) / 1_000)
+    } as unknown as AuthCredential);
+
+    await expect(
+      ClaudeAgentSdkRuntime.create({
+        descriptor: createDescriptor(rootDir),
+        callbacks: {
+          onStatusChange: async () => {}
+        },
+        systemPrompt: "You are a worker",
+        tools: [],
+        authFile
+      })
+    ).rejects.toThrow("claude-agent-sdk OAuth token expired.");
+  });
+
+  it("accepts oauth credentials when expiry is a future ISO timestamp", async () => {
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+
+    setAuthCredential(authFile, "claude-agent-sdk", {
+      type: "oauth",
+      access: "claude-oauth-token",
+      refresh: "",
+      expires: new Date(Date.now() + 60_000).toISOString()
+    } as unknown as AuthCredential);
+
+    const runtime = await ClaudeAgentSdkRuntime.create({
+      descriptor: createDescriptor(rootDir),
+      callbacks: {
+        onStatusChange: async () => {}
+      },
+      systemPrompt: "You are a worker",
+      tools: [],
+      authFile
+    });
+
+    expect(runtime.getStatus()).toBe("idle");
+    await runtime.terminate({ abort: true });
+  });
+
+  it("reports followUp when busy instead of steer", async () => {
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+
+    setAuthCredential(authFile, "claude-agent-sdk", {
+      type: "oauth",
+      access: "claude-oauth-token",
+      refresh: "",
+      expires: String(Date.now() + 60_000)
+    } as unknown as AuthCredential);
+
+    const runtime = await ClaudeAgentSdkRuntime.create({
+      descriptor: createDescriptor(rootDir),
+      callbacks: {
+        onStatusChange: async () => {}
+      },
+      systemPrompt: "You are a worker",
+      tools: [],
+      authFile
+    });
+
+    // Force busy state without starting SDK query execution.
+    (runtime as unknown as { processingLoop?: Promise<void> }).processingLoop = new Promise<void>(() => {});
+
+    const receipt = await runtime.sendMessage("queued");
+    expect(receipt.acceptedMode).toBe("followUp");
+
+    (runtime as unknown as { processingLoop?: Promise<void> }).processingLoop = undefined;
+    await runtime.terminate({ abort: true });
+  });
 });

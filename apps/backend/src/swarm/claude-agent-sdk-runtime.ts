@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import {
   createSdkMcpServer,
   query,
@@ -31,7 +33,10 @@ import type {
 } from "./types.js";
 
 const AUTH_REQUIRED_ERROR_CODE = "CLAUDE_AGENT_SDK_AUTH_REQUIRED";
+const RESUME_RECOVERY_ERROR_CODE = "CLAUDE_AGENT_SDK_RESUME_RECOVERY";
 const TOOL_MCP_SERVER_NAME = "swarm-tools";
+const CLAUDE_RUNTIME_STATE_ENTRY_TYPE = "swarm_claude_agent_sdk_runtime_state";
+const CLAUDE_RUNTIME_STATE_FILE_SUFFIX = ".claude-runtime-state.json";
 
 interface PendingDelivery {
   deliveryId: string;
@@ -46,6 +51,10 @@ interface AuthTokenResolution {
   token: string;
 }
 
+interface ClaudeRuntimeState {
+  sessionId: string;
+}
+
 export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
   readonly descriptor: AgentDescriptor;
 
@@ -56,6 +65,7 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
   private readonly sessionManager: SessionManager;
   private readonly runtimeEnv: Record<string, string | undefined>;
   private readonly sdkMcpServer: ReturnType<typeof createSdkMcpServer>;
+  private readonly runtimeStateFile: string;
 
   private status: AgentStatus;
   private contextUsage: AgentContextUsage | undefined;
@@ -64,8 +74,10 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
   private currentQuery: Query | undefined;
   private currentAbortController: AbortController | undefined;
   private activeToolsById = new Map<string, ActiveToolProgress>();
+  private readonly resumeRecoveryAttemptedDeliveryIds = new Set<string>();
   private isTerminating = false;
   private isStopping = false;
+  private sessionId: string | undefined;
 
   private constructor(options: {
     descriptor: AgentDescriptor;
@@ -83,6 +95,8 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
     this.status = options.descriptor.status;
     this.authStorage = AuthStorage.create(options.authFile);
     this.sessionManager = SessionManager.open(options.descriptor.sessionFile);
+    this.runtimeStateFile = `${options.descriptor.sessionFile}${CLAUDE_RUNTIME_STATE_FILE_SUFFIX}`;
+    this.sessionId = this.readPersistedRuntimeState()?.sessionId;
     this.runtimeEnv = {
       ...options.runtimeEnv
     };
@@ -163,7 +177,7 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
 
     const deliveryId = randomUUID();
     const message = normalizeRuntimeUserMessage(input);
-    const acceptedMode = this.isBusy() ? "steer" : "prompt";
+    const acceptedMode = this.isBusy() ? "followUp" : "prompt";
 
     this.pendingDeliveries.push({
       deliveryId,
@@ -276,22 +290,40 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
 
       try {
         await this.executeDelivery(next);
+        this.resumeRecoveryAttemptedDeliveryIds.delete(next.deliveryId);
       } catch (error) {
         if (this.status === "terminated" || this.isStopping || isAbortError(error)) {
           break;
         }
 
+        if (
+          isResumeRecoveryError(error) &&
+          !this.resumeRecoveryAttemptedDeliveryIds.has(next.deliveryId)
+        ) {
+          this.resumeRecoveryAttemptedDeliveryIds.add(next.deliveryId);
+          this.pendingDeliveries.unshift(next);
+          this.clearPersistedRuntimeState();
+          await this.updateStatus("idle");
+          continue;
+        }
+        this.resumeRecoveryAttemptedDeliveryIds.delete(next.deliveryId);
+
+        const message = errorToMessage(error);
+
         const droppedPendingCount = this.pendingDeliveries.length;
         this.pendingDeliveries = [];
 
-        const message = errorToMessage(error);
-        const isAuthFailure = isAuthRequiredError(error) || this.isAuthFailureMessage(message);
+        const isAuthRequired = isAuthRequiredError(error);
+        const isAuthFailure = isAuthRequired || this.isAuthFailureMessage(message);
+        const normalizedMessage = isAuthRequired
+          ? message
+          : isAuthFailure
+            ? buildAuthReconnectMessage(message)
+            : message;
 
         await this.callbacks.onRuntimeError?.(this.descriptor.agentId, {
           phase: "prompt_start",
-          message: isAuthFailure
-            ? buildAuthReconnectMessage(message)
-            : message,
+          message: normalizedMessage,
           details: {
             droppedPendingCount,
             retriable: !isAuthFailure,
@@ -315,8 +347,13 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
     const auth = this.resolveAuthToken();
     const prompt = this.toPromptText(delivery.message);
     const abortController = new AbortController();
+    const attemptedResumeId = this.sessionId;
+    const usedResume = typeof attemptedResumeId === "string" && attemptedResumeId.length > 0;
 
     this.currentAbortController = abortController;
+    const stderrChunks: string[] = [];
+    let sawAssistantOrToolActivity = false;
+
     this.currentQuery = query({
       prompt,
       options: {
@@ -331,16 +368,22 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
         },
         env: this.buildRuntimeEnv(auth.token),
         abortController,
+        // Avoid surfacing raw SDK stderr lines directly to user-visible runtime errors.
         stderr: (data) => {
           const trimmed = data.trim();
           if (!trimmed) {
             return;
           }
 
-          this.logRuntimeError("runtime_exit", new Error(trimmed), {
-            stage: "claude_sdk_stderr"
-          });
-        }
+          if (stderrChunks.length < 5) {
+            stderrChunks.push(trimmed);
+          }
+        },
+        ...(attemptedResumeId
+          ? {
+              resume: attemptedResumeId
+            }
+          : {})
       }
     });
 
@@ -359,7 +402,10 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
 
     try {
       for await (const sdkMessage of this.currentQuery) {
+        this.captureSessionId((sdkMessage as { session_id?: unknown }).session_id);
+
         if (sdkMessage.type === "assistant") {
+          sawAssistantOrToolActivity = true;
           if (sdkMessage.error) {
             lastAssistantError = sdkMessage.error;
           }
@@ -369,11 +415,13 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
         }
 
         if (sdkMessage.type === "tool_progress") {
+          sawAssistantOrToolActivity = true;
           await this.emitToolProgressEvents(sdkMessage);
           continue;
         }
 
         if (sdkMessage.type === "tool_use_summary") {
+          sawAssistantOrToolActivity = true;
           await this.emitToolSummaryEvents(sdkMessage);
           continue;
         }
@@ -391,6 +439,18 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
           continue;
         }
       }
+    } catch (error) {
+      const message = errorToMessage(error);
+      if (
+        usedResume &&
+        !sawAssistantOrToolActivity &&
+        attemptedResumeId === this.sessionId &&
+        this.isResumeFailureMessage(message)
+      ) {
+        throw createResumeRecoveryError(message, attemptedResumeId);
+      }
+
+      throw error;
     } finally {
       await this.completeActiveToolCalls();
       this.currentQuery?.close();
@@ -407,7 +467,32 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
     });
 
     if (!resultMessage) {
-      return;
+      const stderrSummary = summarizeSdkStderr(stderrChunks);
+      const normalizedMessage =
+        (typeof lastAuthStatusError === "string" && lastAuthStatusError.length > 0
+          ? lastAuthStatusError
+          : undefined) ??
+        (lastAssistantError ? sdkAssistantErrorToMessage(lastAssistantError) : undefined) ??
+        stderrSummary ??
+        "Claude Agent SDK exited without returning a result.";
+
+      if (
+        lastAssistantError === "authentication_failed" ||
+        this.isAuthFailureMessage(normalizedMessage)
+      ) {
+        throw createAuthRequiredError(normalizedMessage);
+      }
+
+      if (
+        usedResume &&
+        !sawAssistantOrToolActivity &&
+        attemptedResumeId === this.sessionId &&
+        this.isResumeFailureMessage(normalizedMessage)
+      ) {
+        throw createResumeRecoveryError(normalizedMessage, attemptedResumeId);
+      }
+
+      throw new Error(normalizedMessage);
     }
 
     if (resultMessage.subtype === "success") {
@@ -420,6 +505,15 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
       typeof lastAuthStatusError === "string" && lastAuthStatusError.length > 0
         ? lastAuthStatusError
         : resultErrorMessage;
+
+    if (
+      usedResume &&
+      !sawAssistantOrToolActivity &&
+      attemptedResumeId === this.sessionId &&
+      this.isResumeFailureMessage(normalizedMessage)
+    ) {
+      throw createResumeRecoveryError(normalizedMessage, attemptedResumeId);
+    }
 
     const isAuthFailure =
       lastAssistantError === "authentication_failed" || this.isAuthFailureMessage(normalizedMessage);
@@ -442,6 +536,81 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
     }
 
     return `${message.text}\n\n${imageNotice}`;
+  }
+
+  private readPersistedRuntimeState(): ClaudeRuntimeState | undefined {
+    const fromFile = this.readPersistedRuntimeStateFromFile();
+    if (fromFile) {
+      if (fromFile.sessionId === null) {
+        return undefined;
+      }
+
+      if (typeof fromFile.sessionId === "string" && fromFile.sessionId.trim().length > 0) {
+        return {
+          sessionId: fromFile.sessionId.trim()
+        };
+      }
+    }
+
+    const entries = this.getCustomEntries(CLAUDE_RUNTIME_STATE_ENTRY_TYPE);
+
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const maybe = entries[index] as { sessionId?: unknown } | undefined;
+      if (!maybe || !("sessionId" in maybe)) {
+        continue;
+      }
+
+      if (maybe.sessionId === null) {
+        return undefined;
+      }
+
+      if (typeof maybe.sessionId !== "string" || maybe.sessionId.trim().length === 0) {
+        continue;
+      }
+
+      return {
+        sessionId: maybe.sessionId.trim()
+      };
+    }
+
+    return undefined;
+  }
+
+  private persistRuntimeState(): void {
+    if (!this.sessionId) {
+      return;
+    }
+
+    this.writePersistedRuntimeStateFileSafe({
+      sessionId: this.sessionId
+    });
+    this.appendCustomRuntimeStateEntrySafe({
+      sessionId: this.sessionId
+    });
+  }
+
+  private clearPersistedRuntimeState(): void {
+    this.sessionId = undefined;
+    this.writePersistedRuntimeStateFileSafe({
+      sessionId: null
+    });
+    this.appendCustomRuntimeStateEntrySafe({
+      sessionId: null
+    });
+  }
+
+  private captureSessionId(value: unknown): void {
+    if (typeof value !== "string") {
+      return;
+    }
+
+    const normalized = value.trim();
+    if (!normalized || normalized === this.sessionId) {
+      return;
+    }
+
+    this.sessionId = normalized;
+    this.persistRuntimeState();
   }
 
   private resolveAuthToken(): AuthTokenResolution {
@@ -481,18 +650,92 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
     return env;
   }
 
+  private readPersistedRuntimeStateFromFile(): { sessionId?: unknown } | undefined {
+    let raw: string;
+    try {
+      raw = readFileSync(this.runtimeStateFile, "utf8");
+    } catch {
+      return undefined;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return undefined;
+    }
+
+    if (!parsed || typeof parsed !== "object" || !("sessionId" in parsed)) {
+      return undefined;
+    }
+
+    return parsed as { sessionId?: unknown };
+  }
+
+  private writePersistedRuntimeStateFile(state: { sessionId: string | null }): void {
+    mkdirSync(dirname(this.runtimeStateFile), { recursive: true });
+    writeFileSync(this.runtimeStateFile, `${JSON.stringify(state)}\n`, "utf8");
+  }
+
+  private writePersistedRuntimeStateFileSafe(state: { sessionId: string | null }): void {
+    try {
+      this.writePersistedRuntimeStateFile(state);
+    } catch (error) {
+      this.logRuntimeError("runtime_exit", error, {
+        stage: "persist_runtime_state_file",
+        sessionFile: this.descriptor.sessionFile
+      });
+    }
+  }
+
+  private appendCustomRuntimeStateEntrySafe(state: { sessionId: string | null }): void {
+    try {
+      this.appendCustomEntry(CLAUDE_RUNTIME_STATE_ENTRY_TYPE, state);
+    } catch (error) {
+      this.logRuntimeError("runtime_exit", error, {
+        stage: "persist_runtime_state_custom_entry",
+        sessionFile: this.descriptor.sessionFile
+      });
+    }
+  }
+
+  private isResumeFailureMessage(message: string): boolean {
+    const normalized = message.trim().toLowerCase();
+    if (!normalized) {
+      return false;
+    }
+
+    const resumeFailurePatterns = [
+      /\bresume\b.*\b(failed|invalid|unknown|not found|error)\b/,
+      /\bfailed to resume\b/,
+      /\binvalid resume\b/,
+      /\bsession\b.*\b(not found|unknown|invalid|expired)\b/,
+      /\bconversation\b.*\b(not found|unknown)\b/
+    ];
+
+    return resumeFailurePatterns.some((pattern) => pattern.test(normalized));
+  }
+
   private isAuthFailureMessage(message: string): boolean {
     const normalized = message.trim().toLowerCase();
+    if (!normalized) {
+      return false;
+    }
 
-    return (
-      normalized.includes("authentication") ||
-      normalized.includes("auth") ||
-      normalized.includes("unauthorized") ||
-      normalized.includes("api key") ||
-      normalized.includes("invalid_api_key") ||
-      normalized.includes("invalid api key") ||
-      normalized.includes("token")
-    );
+    const authFailurePatterns = [
+      /\bauthentication[_ ]failed\b/,
+      /\bunauthorized\b/,
+      /\binvalid[_ ]api[_ ]key\b/,
+      /\binvalid api key\b/,
+      /\binvalid access token\b/,
+      /\binvalid token\b/,
+      /\btoken expired\b/,
+      /\baccess token\b.*\bexpired\b/,
+      /\boauth\b.*\bexpired\b/,
+      /\blogin required\b/
+    ];
+
+    return authFailurePatterns.some((pattern) => pattern.test(normalized));
   }
 
   private async emitAssistantMessageEvents(message: SDKAssistantMessage): Promise<void> {
@@ -733,7 +976,7 @@ function resolveCredentialExpiryMs(credential: AuthCredential): number | undefin
   const expiresValue = (credential as { expires?: unknown }).expires;
 
   if (typeof expiresValue === "number" && Number.isFinite(expiresValue)) {
-    return expiresValue;
+    return normalizeEpochMs(expiresValue);
   }
 
   if (typeof expiresValue === "string") {
@@ -742,11 +985,26 @@ function resolveCredentialExpiryMs(credential: AuthCredential): number | undefin
       return undefined;
     }
 
-    const numeric = Number.parseInt(trimmed, 10);
-    return Number.isFinite(numeric) ? numeric : undefined;
+    if (/^\d+$/u.test(trimmed)) {
+      const numeric = Number.parseInt(trimmed, 10);
+      if (!Number.isFinite(numeric)) {
+        return undefined;
+      }
+      return normalizeEpochMs(numeric);
+    }
+
+    const parsedDate = Date.parse(trimmed);
+    if (Number.isFinite(parsedDate)) {
+      return parsedDate;
+    }
   }
 
   return undefined;
+}
+
+function normalizeEpochMs(value: number): number {
+  // Handle credential stores that persist unix seconds instead of milliseconds.
+  return value > 0 && value < 1_000_000_000_000 ? value * 1_000 : value;
 }
 
 function normalizeToken(value: unknown): string | undefined {
@@ -770,6 +1028,43 @@ function isAuthRequiredError(error: unknown): boolean {
   }
 
   return (error as { code?: unknown }).code === AUTH_REQUIRED_ERROR_CODE;
+}
+
+function createResumeRecoveryError(reason: string, attemptedResumeId: string): Error {
+  const normalizedReason = reason.trim().length > 0 ? reason.trim() : "Claude Agent SDK resume failed.";
+  const error = new Error(normalizedReason);
+  (
+    error as Error & {
+      code?: string;
+      attemptedResumeId?: string;
+    }
+  ).code = RESUME_RECOVERY_ERROR_CODE;
+  (
+    error as Error & {
+      code?: string;
+      attemptedResumeId?: string;
+    }
+  ).attemptedResumeId = attemptedResumeId;
+  return error;
+}
+
+function isResumeRecoveryError(
+  error: unknown
+): error is Error & { code: typeof RESUME_RECOVERY_ERROR_CODE; attemptedResumeId: string } {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const maybe = error as {
+    code?: unknown;
+    attemptedResumeId?: unknown;
+  };
+
+  return (
+    maybe.code === RESUME_RECOVERY_ERROR_CODE &&
+    typeof maybe.attemptedResumeId === "string" &&
+    maybe.attemptedResumeId.trim().length > 0
+  );
 }
 
 function buildAuthReconnectMessage(reason: string): string {
@@ -858,4 +1153,27 @@ function isAbortError(error: unknown): boolean {
   }
 
   return name === "AbortError";
+}
+
+function summarizeSdkStderr(chunks: string[]): string | undefined {
+  if (chunks.length === 0) {
+    return undefined;
+  }
+
+  const firstNonEmptyLine = chunks
+    .join("\n")
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+
+  if (!firstNonEmptyLine) {
+    return undefined;
+  }
+
+  const sanitized = firstNonEmptyLine.replace(/\s+/gu, " ");
+  if (sanitized.length <= 180) {
+    return sanitized;
+  }
+
+  return `${sanitized.slice(0, 180)}...`;
 }

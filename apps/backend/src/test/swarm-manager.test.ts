@@ -734,6 +734,47 @@ describe('SwarmManager', () => {
     expect(managerRuntime?.sendCalls.at(-1)?.message).toBe('[sourceContext] {"channel":"web"}\n\ninterrupt current plan')
   })
 
+  it('downgrades manager user input delivery to followUp for claude-agent-sdk managers', async () => {
+    const config = await makeTempConfig()
+    config.defaultModel = {
+      provider: 'claude-agent-sdk',
+      modelId: 'claude-opus-4-6',
+      thinkingLevel: 'xhigh',
+    }
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    await manager.handleUserMessage('interrupt current plan')
+
+    const managerRuntime = manager.runtimeByAgentId.get('manager')
+    expect(managerRuntime).toBeDefined()
+    expect(managerRuntime?.sendCalls.at(-1)?.delivery).toBe('followUp')
+    expect(managerRuntime?.sendCalls.at(-1)?.message).toBe('[sourceContext] {"channel":"web"}\n\ninterrupt current plan')
+  })
+
+  it('downgrades manager user input delivery to followUp for claude provider casing variants', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const state = manager as unknown as {
+      descriptors: Map<string, AgentDescriptor>
+    }
+    const managerDescriptor = state.descriptors.get('manager')
+    expect(managerDescriptor).toBeDefined()
+    managerDescriptor!.model = {
+      provider: 'Claude-Agent-SDK' as AgentDescriptor['model']['provider'],
+      modelId: 'claude-opus-4-6',
+      thinkingLevel: 'xhigh',
+    }
+
+    await manager.handleUserMessage('interrupt current plan')
+
+    const managerRuntime = manager.runtimeByAgentId.get('manager')
+    expect(managerRuntime).toBeDefined()
+    expect(managerRuntime?.sendCalls.at(-1)?.delivery).toBe('followUp')
+  })
+
   it('surfaces manager assistant overflow turns as system conversation messages', async () => {
     const config = await makeTempConfig()
     const manager = new TestSwarmManager(config)
@@ -1272,6 +1313,20 @@ describe('SwarmManager', () => {
     expect(steerReceipt.acceptedMode).toBe('steer')
   })
 
+  it('downgrades explicit steer delivery to followUp for claude-agent-sdk targets', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const worker = await manager.spawnAgent('manager', { agentId: 'Claude Worker', model: 'claude-agent-sdk' })
+    const runtime = manager.runtimeByAgentId.get(worker.agentId)
+    expect(runtime).toBeDefined()
+
+    await manager.sendMessage('manager', worker.agentId, 'queued steer', 'steer')
+
+    expect(runtime?.sendCalls.at(-1)?.delivery).toBe('followUp')
+  })
+
   it('kills a busy runtime with abort then marks descriptor terminated', async () => {
     const config = await makeTempConfig()
     const manager = new TestSwarmManager(config)
@@ -1447,6 +1502,99 @@ describe('SwarmManager', () => {
     expect(persistedWorker?.status).toBe('idle')
     expect(manager.createdRuntimeIds).toEqual([])
     expect(manager.runtimeByAgentId.get('worker-unknown-model')).toBeUndefined()
+  })
+
+  it('fails closed for unknown persisted descriptors on boot restore for streaming workers', async () => {
+    const config = await makeTempConfig()
+
+    const seedAgents = {
+      agents: [
+        {
+          agentId: 'manager',
+          displayName: 'Manager',
+          role: 'manager',
+          managerId: 'manager',
+          status: 'idle',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          cwd: config.defaultCwd,
+          model: config.defaultModel,
+          sessionFile: join(config.paths.sessionsDir, 'manager.jsonl'),
+        },
+        {
+          agentId: 'worker-unknown-streaming',
+          displayName: 'Worker Unknown Streaming',
+          role: 'worker',
+          managerId: 'manager',
+          status: 'streaming',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          cwd: config.defaultCwd,
+          model: {
+            provider: 'unknown-provider',
+            modelId: 'unknown-model',
+            thinkingLevel: 'xhigh',
+          },
+          sessionFile: join(config.paths.sessionsDir, 'worker-unknown-streaming.jsonl'),
+        },
+      ],
+    }
+
+    await writeFile(config.paths.agentsStoreFile, JSON.stringify(seedAgents, null, 2), 'utf8')
+
+    const manager = new TestSwarmManager(config)
+    await manager.boot()
+
+    const restored = manager.listAgents().find((agent) => agent.agentId === 'worker-unknown-streaming')
+    const persistedStore = JSON.parse(await readFile(config.paths.agentsStoreFile, 'utf8')) as {
+      agents: Array<{ agentId: string; status: AgentDescriptor['status'] }>
+    }
+    const persisted = persistedStore.agents.find((agent) => agent.agentId === 'worker-unknown-streaming')
+
+    // Boot normalization should not restore runtime or fallback providers for unknown descriptors.
+    expect(restored?.status).toBe('idle')
+    expect(persisted?.status).toBe('idle')
+    expect(manager.createdRuntimeIds).toEqual([])
+    expect(manager.runtimeByAgentId.get('worker-unknown-streaming')).toBeUndefined()
+  })
+
+  it('keeps configured primary manager fail-closed when persisted descriptor is unknown', async () => {
+    const config = await makeTempConfig()
+
+    const seedAgents = {
+      agents: [
+        {
+          agentId: 'manager',
+          displayName: 'Manager',
+          role: 'manager',
+          managerId: 'manager',
+          status: 'streaming',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          cwd: config.defaultCwd,
+          model: {
+            provider: 'unknown-provider',
+            modelId: 'unknown-model',
+            thinkingLevel: 'xhigh',
+          },
+          sessionFile: join(config.paths.sessionsDir, 'manager.jsonl'),
+        },
+      ],
+    }
+
+    await writeFile(config.paths.agentsStoreFile, JSON.stringify(seedAgents, null, 2), 'utf8')
+
+    const manager = new TestSwarmManager(config)
+    await manager.boot()
+
+    const restoredManager = manager.listAgents().find((agent) => agent.agentId === 'manager')
+    expect(restoredManager?.status).toBe('idle')
+
+    await expect(manager.handleUserMessage('hello manager')).rejects.toThrow(
+      'Unsupported model descriptor unknown-provider/unknown-model',
+    )
+    expect(manager.createdRuntimeIds).toEqual([])
+    expect(manager.runtimeByAgentId.get('manager')).toBeUndefined()
   })
 
   it('migrates persisted stopped_on_restart statuses to stopped at boot', async () => {
@@ -1853,6 +2001,11 @@ describe('SwarmManager', () => {
     const manager = new TestSwarmManager(config)
     await bootWithDefaultManager(manager, config)
 
+    const managerDescriptor = manager.listAgents().find((agent) => agent.agentId === 'manager')
+    expect(managerDescriptor).toBeDefined()
+    const managerRuntimeStateFile = `${managerDescriptor!.sessionFile}.claude-runtime-state.json`
+    await writeFile(managerRuntimeStateFile, `${JSON.stringify({ sessionId: 'stale-session' })}\n`, 'utf8')
+
     await manager.handleUserMessage('before reset')
     expect(manager.getConversationHistory('manager').some((message) => message.text === 'before reset')).toBe(true)
 
@@ -1864,6 +2017,7 @@ describe('SwarmManager', () => {
     expect(firstRuntime!.terminateCalls).toEqual([{ abort: true }])
     expect(manager.createdRuntimeIds.filter((id) => id === 'manager')).toHaveLength(2)
     expect(manager.getConversationHistory('manager')).toHaveLength(0)
+    await expect(readFile(managerRuntimeStateFile, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
 
     const rebooted = new TestSwarmManager(config)
     await bootWithDefaultManager(rebooted, config)
