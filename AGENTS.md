@@ -21,6 +21,12 @@
 2. A TanStack Start + Vite SPA for dashboard, chat, settings, and artifacts.
 3. Realtime updates over WebSocket.
 
+### Development Overview
+- Personal/internal project, not a shipped product.
+- Primary user is only the developer.
+- Network exposure, if any, is via your own Tailscale account.
+- Main goal is reliability and iteration speed, not enterprise hardening.
+
 ## Scope Expectations
 For dashboard/chat/settings work, preserve existing behavior and interaction patterns unless the task explicitly requests a redesign.
 
