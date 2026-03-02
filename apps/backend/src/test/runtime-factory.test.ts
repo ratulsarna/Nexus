@@ -140,7 +140,8 @@ describe("RuntimeFactory", () => {
     expect(call.authFile).toBe("/tmp/swarm-data/auth/auth.json");
     expect(call.runtimeEnv).toMatchObject({
       SWARM_DATA_DIR: "/tmp/swarm-data",
-      SWARM_MEMORY_FILE: "/tmp/swarm-data/memory/manager.md"
+      SWARM_MEMORY_FILE: "/tmp/swarm-data/memory/manager.md",
+      CLAUDE_CONFIG_DIR: "/tmp/swarm-data/claude-code"
     });
     expect(call.systemPrompt).toContain("Base system prompt");
     expect(call.systemPrompt).toContain("Repository policy context.");

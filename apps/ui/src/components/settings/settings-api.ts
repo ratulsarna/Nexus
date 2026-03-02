@@ -36,8 +36,8 @@ export const SETTINGS_AUTH_PROVIDER_META: Record<
   },
   'claude-agent-sdk': {
     label: 'Claude Agent SDK credential',
-    description: 'Used by the claude-agent-sdk runtime (OAuth required).',
-    placeholder: 'Configured via OAuth login only',
+    description: 'Uses a Claude Code OAuth token from your Claude subscription (CLAUDE_CODE_OAUTH_TOKEN).',
+    placeholder: 'Configured via Claude token login',
     helpUrl: 'https://platform.claude.com/docs/en/agent-sdk/overview',
     oauthRequired: true,
   },

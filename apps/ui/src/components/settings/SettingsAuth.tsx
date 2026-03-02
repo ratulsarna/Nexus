@@ -196,7 +196,9 @@ function AuthProviderRow({
             <div className="space-y-1">
               <p className="text-xs font-medium text-foreground">OAuth login</p>
               <p className="text-[11px] text-muted-foreground">
-                Authorize in your browser and store refresh/access tokens automatically.
+                {provider === 'claude-agent-sdk'
+                  ? 'Load or paste CLAUDE_CODE_OAUTH_TOKEN from Claude Code (subscription OAuth).'
+                  : 'Authorize in your browser and store refresh/access tokens automatically.'}
               </p>
             </div>
 

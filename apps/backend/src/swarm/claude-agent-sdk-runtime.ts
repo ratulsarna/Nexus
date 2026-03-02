@@ -11,7 +11,9 @@ import {
   type SDKResultError,
   type SDKResultMessage
 } from "@anthropic-ai/claude-agent-sdk";
+import { refreshAnthropicToken } from "@mariozechner/pi-ai/dist/utils/oauth/anthropic.js";
 import { AuthStorage, SessionManager, type AuthCredential, type ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { z, type ZodType } from "zod";
 import { transitionAgentStatus } from "./agent-state-machine.js";
 import {
   normalizeRuntimeError,
@@ -49,10 +51,34 @@ interface ActiveToolProgress {
 
 interface AuthTokenResolution {
   token: string;
+  refreshToken?: string;
 }
 
 interface ClaudeRuntimeState {
   sessionId: string;
+}
+
+interface ClaudeExecutionErrorDetails extends Record<string, unknown> {
+  runtime: "claude-agent-sdk";
+  outcome: string;
+  deliveryId: string;
+  promptPreview: string;
+  usedResume: boolean;
+  attemptedResumeId?: string;
+  sessionIdAtStart?: string;
+  sessionIdAtEnd?: string;
+  assistantMessages: number;
+  assistantErrorCount: number;
+  toolProgressEvents: number;
+  toolSummaryEvents: number;
+  authStatusEvents: number;
+  resultMessages: number;
+  resultSubtype?: string;
+  lastAssistantError?: string;
+  lastAssistantErrorMessage?: string;
+  lastAuthStatusError?: string;
+  stderrSummary?: string;
+  normalizedMessage?: string;
 }
 
 export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
@@ -106,7 +132,7 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
       tools: options.tools.map((toolDefinition) => ({
         name: toolDefinition.name,
         description: toolDefinition.description,
-        inputSchema: toolDefinition.parameters as any,
+        inputSchema: typeBoxSchemaToZodObject(toolDefinition.parameters) as any,
         handler: async (args: unknown) => {
           try {
             const result = await toolDefinition.execute(
@@ -152,7 +178,7 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
   }): Promise<ClaudeAgentSdkRuntime> {
     const runtime = new ClaudeAgentSdkRuntime(options);
 
-    runtime.resolveAuthToken();
+    await runtime.resolveAuthToken();
 
     return runtime;
   }
@@ -315,6 +341,7 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
 
         const isAuthRequired = isAuthRequiredError(error);
         const isAuthFailure = isAuthRequired || this.isAuthFailureMessage(message);
+        const errorDetails = readErrorDetails(error);
         const normalizedMessage = isAuthRequired
           ? message
           : isAuthFailure
@@ -325,6 +352,7 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
           phase: "prompt_start",
           message: normalizedMessage,
           details: {
+            ...(errorDetails ?? {}),
             droppedPendingCount,
             retriable: !isAuthFailure,
             reconnectRequired: isAuthFailure
@@ -344,15 +372,22 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
   private async executeDelivery(delivery: PendingDelivery): Promise<void> {
     this.ensureNotTerminated();
 
-    const auth = this.resolveAuthToken();
+    const auth = await this.resolveAuthToken();
     const prompt = this.toPromptText(delivery.message);
     const abortController = new AbortController();
-    const attemptedResumeId = this.sessionId;
+    const sessionIdAtStart = this.sessionId;
+    const attemptedResumeId = sessionIdAtStart;
     const usedResume = typeof attemptedResumeId === "string" && attemptedResumeId.length > 0;
 
     this.currentAbortController = abortController;
     const stderrChunks: string[] = [];
     let sawAssistantOrToolActivity = false;
+    let assistantMessageCount = 0;
+    let assistantErrorCount = 0;
+    let toolProgressEventCount = 0;
+    let toolSummaryEventCount = 0;
+    let authStatusEventCount = 0;
+    let resultMessageCount = 0;
 
     this.currentQuery = query({
       prompt,
@@ -366,7 +401,7 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
         mcpServers: {
           [TOOL_MCP_SERVER_NAME]: this.sdkMcpServer
         },
-        env: this.buildRuntimeEnv(auth.token),
+        env: this.buildRuntimeEnv(auth),
         abortController,
         // Avoid surfacing raw SDK stderr lines directly to user-visible runtime errors.
         stderr: (data) => {
@@ -389,7 +424,33 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
 
     let resultMessage: SDKResultMessage | undefined;
     let lastAssistantError: SDKAssistantMessageError | undefined;
+    let lastAssistantErrorMessage: string | undefined;
     let lastAuthStatusError: string | undefined;
+    let streamTerminalError: unknown;
+
+    const buildErrorDetails = (outcome: string, extras?: Record<string, unknown>): ClaudeExecutionErrorDetails =>
+      ({
+        runtime: "claude-agent-sdk",
+        outcome,
+        deliveryId: delivery.deliveryId,
+        promptPreview: previewText(prompt, 240),
+        usedResume,
+        ...(attemptedResumeId ? { attemptedResumeId } : {}),
+        ...(sessionIdAtStart ? { sessionIdAtStart } : {}),
+        ...(this.sessionId ? { sessionIdAtEnd: this.sessionId } : {}),
+        assistantMessages: assistantMessageCount,
+        assistantErrorCount,
+        toolProgressEvents: toolProgressEventCount,
+        toolSummaryEvents: toolSummaryEventCount,
+        authStatusEvents: authStatusEventCount,
+        resultMessages: resultMessageCount,
+        ...(resultMessage ? { resultSubtype: resultMessage.subtype } : {}),
+        ...(lastAssistantError ? { lastAssistantError } : {}),
+        ...(lastAssistantErrorMessage ? { lastAssistantErrorMessage } : {}),
+        ...(lastAuthStatusError ? { lastAuthStatusError } : {}),
+        ...(summarizeSdkStderr(stderrChunks) ? { stderrSummary: summarizeSdkStderr(stderrChunks) } : {}),
+        ...(extras ?? {})
+      });
 
     await this.updateStatus("streaming");
 
@@ -405,9 +466,13 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
         this.captureSessionId((sdkMessage as { session_id?: unknown }).session_id);
 
         if (sdkMessage.type === "assistant") {
+          assistantMessageCount += 1;
           sawAssistantOrToolActivity = true;
           if (sdkMessage.error) {
             lastAssistantError = sdkMessage.error;
+            lastAssistantErrorMessage =
+              extractAssistantErrorMessage(sdkMessage) ?? sdkAssistantErrorToMessage(sdkMessage.error);
+            assistantErrorCount += 1;
           }
 
           await this.emitAssistantMessageEvents(sdkMessage);
@@ -415,18 +480,21 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
         }
 
         if (sdkMessage.type === "tool_progress") {
+          toolProgressEventCount += 1;
           sawAssistantOrToolActivity = true;
           await this.emitToolProgressEvents(sdkMessage);
           continue;
         }
 
         if (sdkMessage.type === "tool_use_summary") {
+          toolSummaryEventCount += 1;
           sawAssistantOrToolActivity = true;
           await this.emitToolSummaryEvents(sdkMessage);
           continue;
         }
 
         if (sdkMessage.type === "auth_status") {
+          authStatusEventCount += 1;
           if (typeof sdkMessage.error === "string" && sdkMessage.error.trim().length > 0) {
             lastAuthStatusError = sdkMessage.error.trim();
           }
@@ -434,6 +502,7 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
         }
 
         if (sdkMessage.type === "result") {
+          resultMessageCount += 1;
           resultMessage = sdkMessage;
           this.updateContextUsageFromResult(sdkMessage);
           continue;
@@ -441,16 +510,49 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
       }
     } catch (error) {
       const message = errorToMessage(error);
+      const maybeResultResumeFailureMessage =
+        resultMessage && resultMessage.subtype !== "success"
+          ? summarizeResultError(toResultError(resultMessage))
+          : undefined;
       if (
         usedResume &&
         !sawAssistantOrToolActivity &&
-        attemptedResumeId === this.sessionId &&
-        this.isResumeFailureMessage(message)
+        (this.isResumeFailureMessage(message) ||
+          (typeof maybeResultResumeFailureMessage === "string" &&
+            this.isResumeFailureMessage(maybeResultResumeFailureMessage)))
       ) {
-        throw createResumeRecoveryError(message, attemptedResumeId);
+        const resumeFailureMessage =
+          maybeResultResumeFailureMessage && this.isResumeFailureMessage(maybeResultResumeFailureMessage)
+            ? maybeResultResumeFailureMessage
+            : message;
+        throw attachErrorDetails(
+          createResumeRecoveryError(resumeFailureMessage, attemptedResumeId),
+          buildErrorDetails("resume_recovery", {
+            normalizedMessage: resumeFailureMessage
+          })
+        );
       }
 
-      throw error;
+      if (lastAssistantError === "authentication_failed") {
+        const authFailureMessage = lastAssistantErrorMessage ?? lastAuthStatusError ?? message;
+        throw attachErrorDetails(
+          createAuthRequiredError(authFailureMessage),
+          buildErrorDetails("query_exception_auth", {
+            normalizedMessage: authFailureMessage
+          })
+        );
+      }
+
+      if (resultMessage) {
+        streamTerminalError = error;
+      } else {
+        throw attachErrorDetails(
+          error,
+          buildErrorDetails("query_exception", {
+            normalizedMessage: message
+          })
+        );
+      }
     } finally {
       await this.completeActiveToolCalls();
       this.currentQuery?.close();
@@ -472,30 +574,60 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
         (typeof lastAuthStatusError === "string" && lastAuthStatusError.length > 0
           ? lastAuthStatusError
           : undefined) ??
+        (typeof lastAssistantErrorMessage === "string" && lastAssistantErrorMessage.length > 0
+          ? lastAssistantErrorMessage
+          : undefined) ??
         (lastAssistantError ? sdkAssistantErrorToMessage(lastAssistantError) : undefined) ??
+        (streamTerminalError ? errorToMessage(streamTerminalError) : undefined) ??
         stderrSummary ??
         "Claude Agent SDK exited without returning a result.";
+      const errorDetails = buildErrorDetails(streamTerminalError ? "stream_terminal_error" : "missing_result", {
+        normalizedMessage
+      });
 
       if (
         lastAssistantError === "authentication_failed" ||
         this.isAuthFailureMessage(normalizedMessage)
       ) {
-        throw createAuthRequiredError(normalizedMessage);
+        throw attachErrorDetails(createAuthRequiredError(normalizedMessage), errorDetails);
       }
 
       if (
         usedResume &&
         !sawAssistantOrToolActivity &&
-        attemptedResumeId === this.sessionId &&
         this.isResumeFailureMessage(normalizedMessage)
       ) {
-        throw createResumeRecoveryError(normalizedMessage, attemptedResumeId);
+        throw attachErrorDetails(createResumeRecoveryError(normalizedMessage, attemptedResumeId), errorDetails);
       }
 
-      throw new Error(normalizedMessage);
+      throw attachErrorDetails(new Error(normalizedMessage), errorDetails);
     }
 
     if (resultMessage.subtype === "success") {
+      if (resultMessage.is_error === true) {
+        const flaggedErrorMessage =
+          (typeof lastAuthStatusError === "string" && lastAuthStatusError.length > 0
+            ? lastAuthStatusError
+            : undefined) ??
+          (typeof lastAssistantErrorMessage === "string" && lastAssistantErrorMessage.length > 0
+            ? lastAssistantErrorMessage
+            : undefined) ??
+          (streamTerminalError ? errorToMessage(streamTerminalError) : undefined) ??
+          "Claude Agent SDK reported a success result flagged as error.";
+        const errorDetails = buildErrorDetails("success_flagged_error", {
+          normalizedMessage: flaggedErrorMessage
+        });
+
+        if (
+          lastAssistantError === "authentication_failed" ||
+          this.isAuthFailureMessage(flaggedErrorMessage)
+        ) {
+          throw attachErrorDetails(createAuthRequiredError(flaggedErrorMessage), errorDetails);
+        }
+
+        throw attachErrorDetails(new Error(flaggedErrorMessage), errorDetails);
+      }
+
       return;
     }
 
@@ -505,24 +637,26 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
       typeof lastAuthStatusError === "string" && lastAuthStatusError.length > 0
         ? lastAuthStatusError
         : resultErrorMessage;
+    const errorDetails = buildErrorDetails("result_error", {
+      normalizedMessage
+    });
 
     if (
       usedResume &&
       !sawAssistantOrToolActivity &&
-      attemptedResumeId === this.sessionId &&
       this.isResumeFailureMessage(normalizedMessage)
     ) {
-      throw createResumeRecoveryError(normalizedMessage, attemptedResumeId);
+      throw attachErrorDetails(createResumeRecoveryError(normalizedMessage, attemptedResumeId), errorDetails);
     }
 
     const isAuthFailure =
       lastAssistantError === "authentication_failed" || this.isAuthFailureMessage(normalizedMessage);
 
     if (isAuthFailure) {
-      throw createAuthRequiredError(normalizedMessage);
+      throw attachErrorDetails(createAuthRequiredError(normalizedMessage), errorDetails);
     }
 
-    throw new Error(normalizedMessage);
+    throw attachErrorDetails(new Error(normalizedMessage), errorDetails);
   }
 
   private toPromptText(message: RuntimeUserMessage): string {
@@ -613,7 +747,7 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
     this.persistRuntimeState();
   }
 
-  private resolveAuthToken(): AuthTokenResolution {
+  private async resolveAuthToken(): Promise<AuthTokenResolution> {
     const credential = this.authStorage.get("claude-agent-sdk");
 
     if (!credential) {
@@ -629,22 +763,56 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
       throw createAuthRequiredError("Missing claude-agent-sdk OAuth access token.");
     }
 
+    const refreshToken = extractRefreshToken(credential);
     const expiresMs = resolveCredentialExpiryMs(credential);
-    if (expiresMs !== undefined && expiresMs <= Date.now()) {
+    if (expiresMs === undefined || expiresMs > Date.now()) {
+      return {
+        token,
+        refreshToken
+      };
+    }
+
+    if (!refreshToken) {
       throw createAuthRequiredError("claude-agent-sdk OAuth token expired.");
     }
 
+    let refreshedCredential: AuthCredential;
+    try {
+      const refreshed = await refreshAnthropicToken(refreshToken);
+      const nextRefreshToken = normalizeToken(refreshed.refresh) ?? refreshToken;
+      refreshedCredential = {
+        ...(credential as Record<string, unknown>),
+        type: "oauth",
+        access: refreshed.access,
+        key: refreshed.access,
+        refresh: nextRefreshToken,
+        expires: refreshed.expires
+      } as AuthCredential;
+      this.authStorage.set("claude-agent-sdk", refreshedCredential);
+    } catch (error) {
+      const reason = errorToMessage(error);
+      throw createAuthRequiredError(`claude-agent-sdk OAuth token expired and refresh failed: ${reason}`);
+    }
+
+    const refreshedToken = extractAuthToken(refreshedCredential);
+    if (!refreshedToken) {
+      throw createAuthRequiredError("Missing claude-agent-sdk OAuth access token.");
+    }
+
     return {
-      token
+      token: refreshedToken,
+      refreshToken: extractRefreshToken(refreshedCredential)
     };
   }
 
-  private buildRuntimeEnv(token: string): Record<string, string | undefined> {
+  private buildRuntimeEnv(auth: AuthTokenResolution): Record<string, string | undefined> {
     const env: Record<string, string | undefined> = {
       ...process.env,
       ...this.runtimeEnv,
-      ANTHROPIC_API_KEY: token,
-      ANTHROPIC_AUTH_TOKEN: token
+      CLAUDE_CODE_OAUTH_TOKEN: auth.token,
+      CLAUDE_CODE_OAUTH_REFRESH_TOKEN: auth.refreshToken,
+      ANTHROPIC_API_KEY: undefined,
+      ANTHROPIC_AUTH_TOKEN: undefined
     };
 
     return env;
@@ -710,7 +878,8 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
       /\bfailed to resume\b/,
       /\binvalid resume\b/,
       /\bsession\b.*\b(not found|unknown|invalid|expired)\b/,
-      /\bconversation\b.*\b(not found|unknown)\b/
+      /\bconversation\b.*\b(not found|unknown)\b/,
+      /\bno conversation found\b/
     ];
 
     return resumeFailurePatterns.some((pattern) => pattern.test(normalized));
@@ -741,13 +910,19 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
   private async emitAssistantMessageEvents(message: SDKAssistantMessage): Promise<void> {
     const content = toRuntimeMessageContent(message.message?.content);
     const stopReason = readStopReason(message.message) ?? (message.error ? "error" : undefined);
-
-    const sessionMessage = {
-      role: "assistant" as const,
+    const sessionMessage: {
+      role: "assistant";
+      content: ReturnType<typeof toRuntimeMessageContent>;
+      stopReason?: string;
+      errorMessage?: string;
+    } = {
+      role: "assistant",
       content,
-      stopReason,
-      errorMessage: message.error ? sdkAssistantErrorToMessage(message.error) : undefined
+      ...(stopReason ? { stopReason } : {})
     };
+    if (message.error) {
+      sessionMessage.errorMessage = sdkAssistantErrorToMessage(message.error);
+    }
 
     await this.callbacks.onSessionEvent?.(this.descriptor.agentId, {
       type: "message_start",
@@ -898,6 +1073,14 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
 
   private logRuntimeError(phase: RuntimeErrorEvent["phase"], error: unknown, details?: Record<string, unknown>): void {
     const normalized = normalizeRuntimeError(error);
+    console.error(`[swarm][${this.now()}] runtime:error`, {
+      runtime: "claude-agent-sdk",
+      agentId: this.descriptor.agentId,
+      phase,
+      message: normalized.message,
+      stack: normalized.stack,
+      details
+    });
 
     void this.callbacks.onRuntimeError?.(this.descriptor.agentId, {
       phase,
@@ -906,6 +1089,136 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
       details
     });
   }
+}
+
+function typeBoxSchemaToZodObject(schema: unknown): z.ZodObject<Record<string, ZodType>> {
+  const converted = typeBoxSchemaToZod(schema);
+  if (converted instanceof z.ZodObject) {
+    return converted;
+  }
+
+  return z.object({}).passthrough();
+}
+
+function typeBoxSchemaToZod(schema: unknown): ZodType {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return z.any();
+  }
+
+  const record = schema as Record<string, unknown>;
+
+  if ("const" in record) {
+    const literal = record.const;
+    if (
+      typeof literal === "string" ||
+      typeof literal === "number" ||
+      typeof literal === "boolean" ||
+      literal === null
+    ) {
+      return withDescription(z.literal(literal), record.description);
+    }
+  }
+
+  if (Array.isArray(record.anyOf)) {
+    const members = record.anyOf.map((entry) => typeBoxSchemaToZod(entry));
+    if (members.length === 0) {
+      return z.any();
+    }
+    if (members.length === 1) {
+      return members[0];
+    }
+
+    return withDescription(
+      z.union([members[0], members[1], ...members.slice(2)] as [ZodType, ZodType, ...ZodType[]]),
+      record.description
+    );
+  }
+
+  const typeValue = record.type;
+  if (typeValue === "string") {
+    return withDescription(z.string(), record.description);
+  }
+
+  if (typeValue === "number") {
+    return withDescription(z.number(), record.description);
+  }
+
+  if (typeValue === "integer") {
+    return withDescription(z.number().int(), record.description);
+  }
+
+  if (typeValue === "boolean") {
+    return withDescription(z.boolean(), record.description);
+  }
+
+  if (typeValue === "null") {
+    return withDescription(z.null(), record.description);
+  }
+
+  if (typeValue === "array") {
+    const itemSchema = typeBoxSchemaToZod(record.items);
+    let arraySchema = z.array(itemSchema);
+    const minItems = asNonNegativeInteger(record.minItems);
+    const maxItems = asNonNegativeInteger(record.maxItems);
+    if (minItems !== undefined) {
+      arraySchema = arraySchema.min(minItems);
+    }
+    if (maxItems !== undefined) {
+      arraySchema = arraySchema.max(maxItems);
+    }
+    return withDescription(arraySchema, record.description);
+  }
+
+  if (typeValue === "object" || "properties" in record) {
+    const properties = toStringRecord(record.properties);
+    const requiredFields = new Set<string>(toStringArray(record.required));
+    const shape: Record<string, ZodType> = {};
+
+    for (const [propertyName, propertySchema] of Object.entries(properties)) {
+      let fieldSchema = typeBoxSchemaToZod(propertySchema);
+      if (!requiredFields.has(propertyName)) {
+        fieldSchema = fieldSchema.optional();
+      }
+      shape[propertyName] = fieldSchema;
+    }
+
+    let objectSchema = z.object(shape);
+    const additionalProperties = record.additionalProperties;
+    if (additionalProperties === true) {
+      objectSchema = objectSchema.passthrough();
+    } else if (additionalProperties && typeof additionalProperties === "object") {
+      objectSchema = objectSchema.catchall(typeBoxSchemaToZod(additionalProperties));
+    } else {
+      objectSchema = objectSchema.strict();
+    }
+
+    return withDescription(objectSchema, record.description);
+  }
+
+  return withDescription(z.any(), record.description);
+}
+
+function withDescription<T extends ZodType>(schema: T, description: unknown): T {
+  if (typeof description === "string" && description.trim().length > 0) {
+    return schema.describe(description.trim()) as T;
+  }
+  return schema;
+}
+
+function toStringRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((entry): entry is string => typeof entry === "string");
 }
 
 function toRuntimeMessageContent(content: unknown): Array<{ type: "text" | "image"; text?: string; mimeType?: string; data?: string }> {
@@ -966,6 +1279,14 @@ function extractAuthToken(credential: AuthCredential): string | undefined {
   }
 
   return normalizeToken((credential as { key?: unknown }).key);
+}
+
+function extractRefreshToken(credential: AuthCredential): string | undefined {
+  if (credential.type !== "oauth") {
+    return undefined;
+  }
+
+  return normalizeToken((credential as { refresh?: unknown }).refresh);
 }
 
 function resolveCredentialExpiryMs(credential: AuthCredential): number | undefined {
@@ -1117,6 +1438,40 @@ function sdkAssistantErrorToMessage(error: SDKAssistantMessageError): string {
   }
 }
 
+function extractAssistantErrorMessage(message: SDKAssistantMessage): string | undefined {
+  const content = message.message?.content;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+
+  const textChunks: string[] = [];
+  for (const item of content) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    if ((item as { type?: unknown }).type !== "text") {
+      continue;
+    }
+
+    const text = (item as { text?: unknown }).text;
+    if (typeof text !== "string") {
+      continue;
+    }
+
+    const trimmed = text.trim();
+    if (trimmed.length > 0) {
+      textChunks.push(trimmed);
+    }
+  }
+
+  if (textChunks.length === 0) {
+    return undefined;
+  }
+
+  return textChunks.join(" ");
+}
+
 function readStopReason(message: { stop_reason?: unknown } | undefined): string | undefined {
   if (!message) {
     return undefined;
@@ -1140,6 +1495,37 @@ function errorToMessage(error: unknown): string {
   }
 
   return String(error);
+}
+
+function attachErrorDetails(error: unknown, details: Record<string, unknown>): Error {
+  const normalized = error instanceof Error ? error : new Error(String(error));
+  const existingDetails = readErrorDetails(normalized);
+  (normalized as Error & { details?: Record<string, unknown> }).details = {
+    ...(existingDetails ?? {}),
+    ...details
+  };
+  return normalized;
+}
+
+function readErrorDetails(error: unknown): Record<string, unknown> | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+
+  const maybe = (error as { details?: unknown }).details;
+  if (!maybe || typeof maybe !== "object" || Array.isArray(maybe)) {
+    return undefined;
+  }
+
+  return maybe as Record<string, unknown>;
+}
+
+function previewText(text: string, maxLength = 160): string {
+  const normalized = text.replace(/\s+/gu, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength)}...`;
 }
 
 function isAbortError(error: unknown): boolean {

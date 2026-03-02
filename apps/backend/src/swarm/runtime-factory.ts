@@ -1,4 +1,5 @@
 import { getModel, type Model } from "@mariozechner/pi-ai";
+import { resolve } from "node:path";
 import {
   AuthStorage,
   DefaultResourceLoader,
@@ -278,7 +279,8 @@ export class RuntimeFactory {
       authFile: this.deps.config.paths.authFile,
       runtimeEnv: {
         SWARM_DATA_DIR: this.deps.config.paths.dataDir,
-        SWARM_MEMORY_FILE: memoryResources.memoryContextFile.path
+        SWARM_MEMORY_FILE: memoryResources.memoryContextFile.path,
+        CLAUDE_CONFIG_DIR: resolve(this.deps.config.paths.dataDir, "claude-code")
       }
     });
 

@@ -29,6 +29,8 @@ import {
   isConversationTextAttachment
 } from "./conversation-validators.js";
 import {
+  extractMessageErrorMessage,
+  extractMessageStopReason,
   extractMessageText,
   extractRole,
 } from "./message-utils.js";
@@ -1925,6 +1927,8 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
       case "message_end":
         this.logDebug(`manager:event:${event.type}`, {
           role: extractRole(event.message),
+          stopReason: extractMessageStopReason(event.message),
+          errorMessage: extractMessageErrorMessage(event.message),
           textPreview: previewForLog(extractMessageText(event.message) ?? "")
         });
         return;
@@ -1952,7 +1956,7 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
 
     this.logDebug("runtime:error", {
       agentId,
-      runtime: descriptor.model.provider.includes("codex-app") ? "codex-app-server" : "pi",
+      runtime: runtimeLabelForProvider(descriptor.model.provider),
       phase: error.phase,
       message,
       stack: error.stack,
@@ -2204,6 +2208,17 @@ function readPositiveIntegerDetail(details: Record<string, unknown> | undefined,
   }
 
   return value;
+}
+
+function runtimeLabelForProvider(provider: string): "pi" | "codex-app-server" | "claude-agent-sdk" {
+  const normalized = provider.trim().toLowerCase();
+  if (normalized.includes("codex-app")) {
+    return "codex-app-server";
+  }
+  if (normalized === "claude-agent-sdk") {
+    return "claude-agent-sdk";
+  }
+  return "pi";
 }
 
 function normalizeConversationAttachments(

@@ -6,7 +6,10 @@ import type {
   OAuthProviderInterface
 } from "@mariozechner/pi-ai/dist/utils/oauth/types.js";
 import { AuthStorage } from "@mariozechner/pi-coding-agent";
+import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { SwarmManager } from "../../swarm/swarm-manager.js";
 import {
   applyCorsHeaders,
@@ -20,6 +23,9 @@ const SETTINGS_AUTH_ENDPOINT_PATH = "/api/settings/auth";
 const SETTINGS_AUTH_LOGIN_ENDPOINT_PATH = "/api/settings/auth/login";
 const SETTINGS_AUTH_LOGIN_METHODS = "POST, OPTIONS";
 const SETTINGS_AUTH_METHODS = "GET, PUT, DELETE, POST, OPTIONS";
+const CLAUDE_CODE_TOKEN_PREFIX = "sk-ant-oat";
+const CLAUDE_CODE_TOKEN_REGEX = /\bsk-ant-oat[A-Za-z0-9._-]+\b/iu;
+const DEFAULT_CLAUDE_CODE_CREDENTIALS_FILE = join(homedir(), ".claude", ".credentials.json");
 
 type OAuthLoginProviderId = "anthropic" | "openai-codex" | "claude-agent-sdk";
 
@@ -45,10 +51,52 @@ interface SettingsAuthLoginFlow {
   closed: boolean;
 }
 
+const claudeAgentSdkOAuthProvider: OAuthProviderInterface = {
+  id: "claude-agent-sdk",
+  name: "Claude Agent SDK (Claude Code OAuth token)",
+  async login(callbacks): Promise<OAuthCredentials> {
+    callbacks.onProgress?.("Preparing Claude Agent SDK authentication...");
+    callbacks.onAuth({
+      url: "https://code.claude.com/docs/en/overview",
+      instructions:
+        "Run `claude setup-token` (recommended) or `claude auth login`, then paste CLAUDE_CODE_OAUTH_TOKEN."
+    });
+
+    const tokenFromCredentialsFile = readClaudeCodeOAuthTokenFromCredentialsFile();
+    if (tokenFromCredentialsFile) {
+      callbacks.onProgress?.("Loaded CLAUDE_CODE_OAUTH_TOKEN from local Claude credentials.");
+      return buildClaudeCodeOAuthCredentials(tokenFromCredentialsFile);
+    }
+
+    const response = await callbacks.onPrompt({
+      message: "Paste CLAUDE_CODE_OAUTH_TOKEN (must start with sk-ant-oat):",
+      placeholder: "sk-ant-oat..."
+    });
+
+    const token = normalizeClaudeCodeTokenCandidate(response);
+    if (!token) {
+      throw new Error("Invalid Claude Code OAuth token. Expected a value that starts with sk-ant-oat.");
+    }
+
+    return buildClaudeCodeOAuthCredentials(token);
+  },
+  async refreshToken(credentials): Promise<OAuthCredentials> {
+    const token = normalizeClaudeCodeTokenCandidate(credentials.access);
+    if (!token) {
+      throw new Error("Stored Claude Code OAuth token is missing or invalid.");
+    }
+
+    return buildClaudeCodeOAuthCredentials(token);
+  },
+  getApiKey(credentials): string {
+    return credentials.access;
+  }
+};
+
 const SETTINGS_AUTH_LOGIN_PROVIDERS: Record<OAuthLoginProviderId, OAuthProviderInterface> = {
   anthropic: anthropicOAuthProvider,
   "openai-codex": openaiCodexOAuthProvider,
-  "claude-agent-sdk": anthropicOAuthProvider
+  "claude-agent-sdk": claudeAgentSdkOAuthProvider
 };
 
 export interface SettingsRouteBundle {
@@ -522,4 +570,110 @@ function resolveSettingsAuthLoginProviderId(rawProvider: string): OAuthLoginProv
   }
 
   return undefined;
+}
+
+function buildClaudeCodeOAuthCredentials(token: string): OAuthCredentials {
+  return {
+    access: token,
+    refresh: "",
+    expires: Number.MAX_SAFE_INTEGER
+  };
+}
+
+function readClaudeCodeOAuthTokenFromCredentialsFile(): string | undefined {
+  const overridePath = process.env.CLAUDE_CODE_CREDENTIALS_FILE;
+  const credentialsFile =
+    typeof overridePath === "string" && overridePath.trim().length > 0
+      ? overridePath.trim()
+      : DEFAULT_CLAUDE_CODE_CREDENTIALS_FILE;
+
+  let raw: string;
+  try {
+    raw = readFileSync(credentialsFile, "utf8");
+  } catch {
+    return undefined;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+
+  return findClaudeCodeOAuthToken(parsed);
+}
+
+function findClaudeCodeOAuthToken(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return normalizeClaudeCodeTokenCandidate(value);
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const token = findClaudeCodeOAuthToken(entry);
+      if (token) {
+        return token;
+      }
+    }
+    return undefined;
+  }
+
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const preferredKeys = [
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "accessToken",
+    "access_token",
+    "oauthToken",
+    "oauth_token",
+    "token"
+  ];
+
+  for (const key of preferredKeys) {
+    const token = normalizeClaudeCodeTokenCandidate(record[key]);
+    if (token) {
+      return token;
+    }
+  }
+
+  for (const nested of Object.values(record)) {
+    const token = findClaudeCodeOAuthToken(nested);
+    if (token) {
+      return token;
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeClaudeCodeTokenCandidate(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const envAssignmentMatch = /CLAUDE_CODE_OAUTH_TOKEN\s*=\s*([^\s"'`]+)/iu.exec(trimmed);
+  if (envAssignmentMatch?.[1]) {
+    return normalizeClaudeCodeTokenCandidate(envAssignmentMatch[1]);
+  }
+
+  const tokenMatch = trimmed.match(CLAUDE_CODE_TOKEN_REGEX);
+  if (!tokenMatch) {
+    return undefined;
+  }
+
+  const token = tokenMatch[0].trim();
+  if (!token.toLowerCase().startsWith(CLAUDE_CODE_TOKEN_PREFIX)) {
+    return undefined;
+  }
+
+  return token;
 }

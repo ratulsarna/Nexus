@@ -843,6 +843,39 @@ describe('SwarmManager', () => {
     }
   })
 
+  it('records manager assistant error turns in runtime logs for debugging', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    seedManagerDescriptorForRuntimeEventTests(manager, config)
+
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [],
+        stopReason: 'error',
+        errorMessage: 'Rate limit exceeded for requests per minute',
+      },
+    })
+
+    const history = manager.getConversationHistory('manager')
+    const runtimeLog = [...history]
+      .reverse()
+      .find(
+        (entry) =>
+          entry.type === 'conversation_log' &&
+          entry.source === 'runtime_log' &&
+          entry.kind === 'message_end' &&
+          entry.role === 'assistant' &&
+          entry.isError === true,
+      )
+
+    expect(runtimeLog).toBeDefined()
+    if (runtimeLog?.type === 'conversation_log') {
+      expect(runtimeLog.text).toContain('Rate limit exceeded for requests per minute')
+    }
+  })
+
   it('handles undefined/null/empty/malformed errorMessage payloads without crashing', async () => {
     const config = await makeTempConfig()
     const manager = new TestSwarmManager(config)
@@ -886,6 +919,25 @@ describe('SwarmManager', () => {
         role: 'assistant',
         content: [{ type: 'text', text: 'normal hidden manager assistant turn' }],
         stopReason: 'stop',
+      },
+    })
+
+    const history = manager.getConversationHistory('manager')
+    expect(history).toHaveLength(0)
+  })
+
+  it('does not treat assistant turns with undefined errorMessage fields as runtime errors', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    seedManagerDescriptorForRuntimeEventTests(manager, config)
+
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Standing by.' }],
+        stopReason: undefined,
+        errorMessage: undefined,
       },
     })
 

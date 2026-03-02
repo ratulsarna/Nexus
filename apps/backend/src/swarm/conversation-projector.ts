@@ -7,7 +7,6 @@ import {
   extractMessageStopReason,
   extractMessageText,
   extractRole,
-  hasMessageErrorMessageField,
   isStrictContextOverflowMessage,
   normalizeProviderErrorMessage
 } from "./message-utils.js";
@@ -306,14 +305,35 @@ export class ConversationProjector {
     }
 
     const stopReason = extractMessageStopReason(event.message);
-    const hasStructuredErrorMessage = hasMessageErrorMessageField(event.message);
+    const explicitErrorMessage = extractMessageErrorMessage(event.message);
+    const hasStructuredErrorMessage = explicitErrorMessage !== undefined;
     if (stopReason !== "error" && !hasStructuredErrorMessage) {
       return;
     }
 
     const messageText = extractMessageText(event.message);
-    const normalizedErrorMessage = normalizeProviderErrorMessage(extractMessageErrorMessage(event.message) ?? messageText);
+    const normalizedErrorMessage = normalizeProviderErrorMessage(explicitErrorMessage ?? messageText);
     const isContextOverflow = isStrictContextOverflowMessage(normalizedErrorMessage);
+    const timestamp = this.deps.now();
+
+    this.deps.logDebug("manager:assistant_error_turn", {
+      agentId,
+      stopReason,
+      hasStructuredErrorMessage,
+      errorMessage: normalizedErrorMessage,
+      textPreview: previewForDebug(messageText ?? "")
+    });
+
+    this.emitConversationLog({
+      type: "conversation_log",
+      agentId,
+      timestamp,
+      source: "runtime_log",
+      kind: "message_end",
+      role: "assistant",
+      text: normalizedErrorMessage ?? "(manager assistant turn ended with error)",
+      isError: true
+    });
 
     this.emitConversationMessage({
       type: "conversation_message",
@@ -323,7 +343,7 @@ export class ConversationProjector {
         errorMessage: normalizedErrorMessage,
         isContextOverflow
       }),
-      timestamp: this.deps.now(),
+      timestamp,
       source: "system"
     });
   }
@@ -397,6 +417,15 @@ function safeJson(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function previewForDebug(text: string, maxLength = 200): string {
+  const normalized = text.replace(/\s+/gu, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength)}...`;
 }
 
 function buildManagerErrorConversationText(options: {

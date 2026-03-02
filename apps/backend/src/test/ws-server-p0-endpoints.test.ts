@@ -469,27 +469,7 @@ describe('SwarmWebSocketServer P0 endpoints', () => {
     }
   })
 
-  it('supports claude-agent-sdk OAuth login SSE flow with the anthropic provider backend', async () => {
-    oauthMockState.anthropicLogin.mockImplementation(async (callbacks: any) => {
-      callbacks.onProgress?.('Preparing OAuth login')
-      callbacks.onAuth?.({
-        url: 'https://auth.example.test/claude-agent-sdk',
-        instructions: 'Open the URL in your browser.',
-      })
-
-      const code = await callbacks.onPrompt?.({
-        message: 'Paste the one-time code',
-        placeholder: 'code-456',
-      })
-
-      callbacks.onProgress?.(`Received code: ${code}`)
-
-      return {
-        accessToken: 'oauth-access-token-claude-agent-sdk',
-        refreshToken: 'oauth-refresh-token-claude-agent-sdk',
-      }
-    })
-
+  it('supports claude-agent-sdk token login SSE flow', async () => {
     const config = await makeTempConfig({ managerId: 'manager' })
     const manager = new FakeSwarmManager(config, [createManagerDescriptor(config.paths.rootDir, 'manager')])
     const server = new SwarmWebSocketServer({
@@ -524,7 +504,7 @@ describe('SwarmWebSocketServer P0 endpoints', () => {
           {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ value: 'claude-agent-sdk-code' }),
+            body: JSON.stringify({ value: 'CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-test-token' }),
           },
         )
 
@@ -535,11 +515,12 @@ describe('SwarmWebSocketServer P0 endpoints', () => {
 
       const eventNames = events.map((event) => event.event)
       expect(eventNames).toEqual(expect.arrayContaining(['progress', 'auth_url', 'prompt', 'complete']))
-      expect(oauthMockState.anthropicLogin).toHaveBeenCalledTimes(1)
+      expect(oauthMockState.anthropicLogin).not.toHaveBeenCalled()
 
       const storedAuth = JSON.parse(await readFile(config.paths.authFile, 'utf8')) as Record<string, unknown>
       expect(storedAuth['claude-agent-sdk']).toMatchObject({
         type: 'oauth',
+        access: 'sk-ant-oat01-test-token',
       })
     } finally {
       await server.stop()
