@@ -1462,6 +1462,17 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
       return existingRuntime;
     }
 
+    const normalizedModel = this.normalizePersistedModelDescriptor(descriptor.model);
+    if (
+      descriptor.model.provider !== normalizedModel.provider ||
+      descriptor.model.modelId !== normalizedModel.modelId ||
+      descriptor.model.thinkingLevel !== normalizedModel.thinkingLevel
+    ) {
+      descriptor.model = normalizedModel;
+      descriptor.updatedAt = this.now();
+      this.descriptors.set(descriptor.agentId, descriptor);
+    }
+
     const runtime = await this.createRuntimeForDescriptor(descriptor, this.resolveSystemPromptForDescriptor(descriptor));
 
     const latestDescriptor = this.descriptors.get(descriptor.agentId);
@@ -1514,7 +1525,7 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
   private normalizePersistedModelDescriptor(
     descriptor: Pick<AgentModelDescriptor, "provider" | "modelId"> | undefined
   ): AgentModelDescriptor {
-    return normalizeSwarmModelDescriptor(descriptor, this.defaultModelPreset);
+    return normalizeSwarmModelDescriptor(descriptor);
   }
 
   private resolveSpawnModel(

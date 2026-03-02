@@ -1383,6 +1383,72 @@ describe('SwarmManager', () => {
     expect(manager.runtimeByAgentId.get('worker-a')).toBeUndefined()
   })
 
+  it('fails closed for persisted unknown model descriptors when lazily restoring runtimes after boot', async () => {
+    const config = await makeTempConfig()
+
+    const seedAgents = {
+      agents: [
+        {
+          agentId: 'manager',
+          displayName: 'Manager',
+          role: 'manager',
+          managerId: 'manager',
+          status: 'idle',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          cwd: config.defaultCwd,
+          model: config.defaultModel,
+          sessionFile: join(config.paths.sessionsDir, 'manager.jsonl'),
+        },
+        {
+          agentId: 'worker-unknown-model',
+          displayName: 'Worker Unknown Model',
+          role: 'worker',
+          managerId: 'manager',
+          status: 'idle',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          cwd: config.defaultCwd,
+          model: {
+            provider: 'unknown-provider',
+            modelId: 'unknown-model',
+            thinkingLevel: 'xhigh',
+          },
+          sessionFile: join(config.paths.sessionsDir, 'worker-unknown-model.jsonl'),
+        },
+      ],
+    }
+
+    await writeFile(config.paths.agentsStoreFile, JSON.stringify(seedAgents, null, 2), 'utf8')
+
+    const manager = new TestSwarmManager(config)
+    await manager.boot()
+
+    await expect(
+      manager.sendMessage('manager', 'worker-unknown-model', 'attempt restore'),
+    ).rejects.toThrow('Unsupported model descriptor unknown-provider/unknown-model')
+
+    const worker = manager.listAgents().find((agent) => agent.agentId === 'worker-unknown-model')
+    const persistedStore = JSON.parse(await readFile(config.paths.agentsStoreFile, 'utf8')) as {
+      agents: Array<{
+        agentId: string
+        status: AgentDescriptor['status']
+        model: AgentDescriptor['model']
+      }>
+    }
+    const persistedWorker = persistedStore.agents.find((agent) => agent.agentId === 'worker-unknown-model')
+
+    expect(worker?.status).toBe('idle')
+    expect(worker?.model).toEqual({
+      provider: 'unknown-provider',
+      modelId: 'unknown-model',
+      thinkingLevel: 'xhigh',
+    })
+    expect(persistedWorker?.status).toBe('idle')
+    expect(manager.createdRuntimeIds).toEqual([])
+    expect(manager.runtimeByAgentId.get('worker-unknown-model')).toBeUndefined()
+  })
+
   it('migrates persisted stopped_on_restart statuses to stopped at boot', async () => {
     const config = await makeTempConfig()
 
@@ -1901,6 +1967,11 @@ describe('SwarmManager', () => {
       cwd: config.defaultCwd,
       model: 'codex-app',
     })
+    const claudeAgentSdkManager = await manager.createManager('manager', {
+      name: 'Claude Agent SDK Manager',
+      cwd: config.defaultCwd,
+      model: 'claude-agent-sdk',
+    })
 
     expect(codexManager.model).toEqual({
       provider: 'openai-codex',
@@ -1915,6 +1986,11 @@ describe('SwarmManager', () => {
     expect(codexAppManager.model).toEqual({
       provider: 'openai-codex-app-server',
       modelId: 'default',
+      thinkingLevel: 'xhigh',
+    })
+    expect(claudeAgentSdkManager.model).toEqual({
+      provider: 'claude-agent-sdk',
+      modelId: 'claude-opus-4-6',
       thinkingLevel: 'xhigh',
     })
   })
@@ -1947,7 +2023,7 @@ describe('SwarmManager', () => {
         cwd: config.defaultCwd,
         model: 'invalid-model' as any,
       }),
-    ).rejects.toThrow('create_manager.model must be one of pi-codex|pi-opus|codex-app')
+    ).rejects.toThrow('create_manager.model must be one of pi-codex|pi-opus|codex-app|claude-agent-sdk')
   })
 
   it('maps spawn_agent model presets to canonical runtime models with highest reasoning', async () => {
@@ -1969,6 +2045,10 @@ describe('SwarmManager', () => {
       agentId: 'Codex App Worker',
       model: 'codex-app',
     })
+    const claudeAgentSdkWorker = await manager.spawnAgent('manager', {
+      agentId: 'Claude SDK Worker',
+      model: 'claude-agent-sdk',
+    })
 
     expect(codexWorker.model).toEqual({
       provider: 'openai-codex',
@@ -1985,6 +2065,11 @@ describe('SwarmManager', () => {
       modelId: 'default',
       thinkingLevel: 'xhigh',
     })
+    expect(claudeAgentSdkWorker.model).toEqual({
+      provider: 'claude-agent-sdk',
+      modelId: 'claude-opus-4-6',
+      thinkingLevel: 'xhigh',
+    })
   })
 
   it('rejects invalid spawn_agent model presets with a clear error', async () => {
@@ -1997,7 +2082,7 @@ describe('SwarmManager', () => {
         agentId: 'Invalid Worker',
         model: 'invalid-model' as any,
       }),
-    ).rejects.toThrow('spawn_agent.model must be one of pi-codex|pi-opus|codex-app')
+    ).rejects.toThrow('spawn_agent.model must be one of pi-codex|pi-opus|codex-app|claude-agent-sdk')
   })
 
   it('allows deleting the default manager when requested', async () => {

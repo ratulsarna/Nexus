@@ -23,6 +23,10 @@ const SETTINGS_AUTH_PROVIDER_DEFINITIONS: Array<{
   {
     provider: "openai-codex",
     storageProvider: "openai-codex"
+  },
+  {
+    provider: "claude-agent-sdk",
+    storageProvider: "claude-agent-sdk"
   }
 ];
 
@@ -153,6 +157,10 @@ export class SecretsEnvService {
       const resolvedProvider = resolveSettingsAuthProvider(rawProvider);
       if (!resolvedProvider) {
         throw new Error(`Invalid auth provider: ${rawProvider}`);
+      }
+
+      if (resolvedProvider.provider === "claude-agent-sdk") {
+        throw new Error("claude-agent-sdk auth must be configured via OAuth login flow.");
       }
 
       const normalizedValue = typeof rawValue === "string" ? rawValue.trim() : "";
