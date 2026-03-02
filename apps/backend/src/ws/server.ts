@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { WebSocketServer } from "ws";
 import type { IntegrationRegistryService } from "../integrations/registry.js";
-import type { ServerEvent } from "@middleman/protocol";
+import type { ServerEvent } from "@nexus/protocol";
 import type { SwarmManager } from "../swarm/swarm-manager.js";
 import { applyCorsHeaders, resolveRequestUrl, sendJson } from "./http-utils.js";
 import { createAgentHttpRoutes } from "./routes/agent-routes.js";

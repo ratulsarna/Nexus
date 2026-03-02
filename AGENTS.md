@@ -1,4 +1,4 @@
-# Middleman - Agent Notes
+# Nexus - Agent Notes
 
 ## Critical Thinking
 - Fix root cause (not band-aid).
@@ -15,7 +15,7 @@
 - Implement features in the simplest possible way
 
 ## What This Project Is
-`middleman` is a local-first multi-agent orchestration platform. It runs:
+`nexus` is a local-first multi-agent orchestration platform. It runs:
 
 1. A Node.js backend for manager/worker orchestration and persistence.
 2. A TanStack Start + Vite SPA for dashboard, chat, settings, and artifacts.

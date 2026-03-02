@@ -1,4 +1,4 @@
-import type { ClientCommand, ServerEvent } from "@middleman/protocol";
+import type { ClientCommand, ServerEvent } from "@nexus/protocol";
 import type { IntegrationRegistryService } from "../integrations/registry.js";
 import type { SwarmManager } from "../swarm/swarm-manager.js";
 import { WebSocketServer, type RawData, WebSocket } from "ws";

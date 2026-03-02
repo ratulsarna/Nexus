@@ -11,7 +11,7 @@ import type {
   SlackChannelDescriptor,
   TelegramSettingsConfig,
 } from './settings-types'
-import type { SlackStatusEvent, TelegramStatusEvent } from '@middleman/protocol'
+import type { SlackStatusEvent, TelegramStatusEvent } from '@nexus/protocol'
 import { resolveApiEndpoint } from '@/lib/api-endpoint'
 
 /* ------------------------------------------------------------------ */

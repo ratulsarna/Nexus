@@ -19,7 +19,7 @@ import {
 import {
   MANAGER_MODEL_PRESETS,
   type ManagerModelPreset,
-} from '@middleman/protocol'
+} from '@nexus/protocol'
 
 const CREATE_MANAGER_MODEL_PRESETS = MANAGER_MODEL_PRESETS.filter(
   (modelPreset) => modelPreset !== 'codex-app',

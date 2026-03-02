@@ -13,7 +13,7 @@ import type { ManagerWsState } from '@/lib/ws-state'
 import type {
   AgentDescriptor,
   ManagerModelPreset,
-} from '@middleman/protocol'
+} from '@nexus/protocol'
 import type { AppRouteState } from './use-route-state'
 
 interface UseManagerActionsOptions {

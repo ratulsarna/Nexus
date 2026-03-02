@@ -7,7 +7,7 @@ import type { SwarmConfig } from "./swarm/types.js";
 
 export function createConfig(): SwarmConfig {
   const rootDir = detectRootDir();
-  const dataDir = resolve(homedir(), ".middleman");
+  const dataDir = resolve(homedir(), ".nexus");
   const managerId = undefined;
   const swarmDir = resolve(dataDir, "swarm");
   const sessionsDir = resolve(dataDir, "sessions");
@@ -30,8 +30,8 @@ export function createConfig(): SwarmConfig {
   ]);
 
   return {
-    host: process.env.MIDDLEMAN_HOST ?? "127.0.0.1",
-    port: Number.parseInt(process.env.MIDDLEMAN_PORT ?? "47187", 10),
+    host: process.env.NEXUS_HOST ?? "127.0.0.1",
+    port: Number.parseInt(process.env.NEXUS_PORT ?? "47187", 10),
     debug: true,
     allowNonManagerSubscriptions: true,
     managerId,

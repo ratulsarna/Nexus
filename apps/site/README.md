@@ -1,6 +1,6 @@
-# @middleman/site
+# @nexus/site
 
-Marketing landing page for Middleman, built with TanStack Start + Tailwind CSS.
+Marketing landing page for Nexus, built with TanStack Start + Tailwind CSS.
 
 ## Scripts
 

@@ -1,4 +1,4 @@
-import type { ClientCommand } from "@middleman/protocol";
+import type { ClientCommand } from "@nexus/protocol";
 import { type RawData } from "ws";
 import { parseConversationAttachments } from "./attachment-parser.js";
 import { describeSwarmModelPresets, isSwarmModelPreset } from "../swarm/model-presets.js";

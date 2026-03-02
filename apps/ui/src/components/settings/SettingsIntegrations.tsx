@@ -42,7 +42,7 @@ import {
   testTelegramConnection,
   toErrorMessage,
 } from './settings-api'
-import type { AgentDescriptor, SlackStatusEvent, TelegramStatusEvent } from '@middleman/protocol'
+import type { AgentDescriptor, SlackStatusEvent, TelegramStatusEvent } from '@nexus/protocol'
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
@@ -583,7 +583,7 @@ export function SettingsIntegrations({
               <ToggleRow label="Reply to inbound message" description="Reply to the triggering Telegram message by default." checked={telegramDraft.replyToInboundMessageByDefault} onChange={(next) => setTelegramDraft((prev) => (prev ? { ...prev, replyToInboundMessageByDefault: next } : prev))} />
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
-              <ToggleRow label="Allow image attachments" description="Ingest Telegram image uploads as Middleman attachments." checked={telegramDraft.allowImages} onChange={(next) => setTelegramDraft((prev) => (prev ? { ...prev, allowImages: next } : prev))} />
+              <ToggleRow label="Allow image attachments" description="Ingest Telegram image uploads as Nexus attachments." checked={telegramDraft.allowImages} onChange={(next) => setTelegramDraft((prev) => (prev ? { ...prev, allowImages: next } : prev))} />
               <ToggleRow label="Allow text attachments" description="Include text-like documents as prompt attachments." checked={telegramDraft.allowText} onChange={(next) => setTelegramDraft((prev) => (prev ? { ...prev, allowText: next } : prev))} />
             </div>
             <div className="grid gap-2 sm:grid-cols-2">

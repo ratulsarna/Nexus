@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { ServerEvent } from "@middleman/protocol";
+import type { ServerEvent } from "@nexus/protocol";
 import {
   loadArchetypePromptRegistry,
   normalizeArchetypeId,

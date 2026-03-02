@@ -54,8 +54,8 @@ const flow = [
 ]
 
 const quickStartCommands = [
-  'git clone https://github.com/SawyerHood/middleman.git',
-  'cd middleman',
+  'git clone https://github.com/ratulsarna/nexus.git',
+  'cd nexus',
   'pnpm install',
   'pnpm dev',
 ]
@@ -70,10 +70,10 @@ function LandingPage() {
             href="#"
             className="font-display text-[1.15rem] tracking-[-0.01em] no-underline"
           >
-            Middleman
+            Nexus
           </a>
           <a
-            href="https://github.com/SawyerHood/middleman"
+            href="https://github.com/ratulsarna/nexus"
             target="_blank"
             rel="noopener noreferrer"
             className="text-[13px] text-muted no-underline transition-colors duration-300 hover:text-ink"
@@ -104,7 +104,7 @@ function LandingPage() {
               Get started
             </a>
             <a
-              href="https://github.com/SawyerHood/middleman"
+              href="https://github.com/ratulsarna/nexus"
               target="_blank"
               rel="noopener noreferrer"
               className="text-[13px] text-muted no-underline transition-colors duration-300 hover:text-ink"
@@ -149,7 +149,7 @@ function LandingPage() {
               different agent sessions.
             </p>
             <p className="text-[1.05rem] leading-[1.7] text-ink">
-              Middleman gives every project a persistent manager that actually
+              Nexus gives every project a persistent manager that actually
               sticks around. You tell it what needs to get done — it dispatches
               workers, tracks progress, and handles the merge queue. You stay
               informed, not involved.
@@ -227,12 +227,12 @@ function LandingPage() {
 
         {/* ── Footer ── */}
         <footer className="flex flex-wrap items-center justify-between gap-4 py-8 text-[12px] text-muted">
-          <span>Middleman — The middle manager your agents deserve</span>
+          <span>Nexus — The middle manager your agents deserve</span>
           <div className="flex gap-6">
             {(
               [
-                ['GitHub', 'https://github.com/SawyerHood/middleman'],
-                ['License', 'https://github.com/SawyerHood/middleman/blob/main/LICENSE'],
+                ['GitHub', 'https://github.com/ratulsarna/nexus'],
+                ['License', 'https://github.com/ratulsarna/nexus/blob/main/LICENSE'],
               ] as const
             ).map(([label, href]) => (
               <a

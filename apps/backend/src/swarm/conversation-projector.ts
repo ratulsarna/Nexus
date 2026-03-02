@@ -1,5 +1,5 @@
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import type { ServerEvent } from "@middleman/protocol";
+import type { ServerEvent } from "@nexus/protocol";
 import { isConversationEntryEvent } from "./conversation-validators.js";
 import { persistSessionManagerCustomEntryIfNeeded } from "./session-manager-custom-entry-persistence.js";
 import {

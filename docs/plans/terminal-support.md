@@ -405,9 +405,9 @@ Exit criteria:
 From repo root:
 
 ```bash
-pnpm --filter @middleman/backend add node-pty
-pnpm --filter @middleman/ui add @xterm/xterm @xterm/addon-fit
-pnpm --filter @middleman/ui add @xterm/addon-web-links @xterm/addon-search
+pnpm --filter @nexus/backend add node-pty
+pnpm --filter @nexus/ui add @xterm/xterm @xterm/addon-fit
+pnpm --filter @nexus/ui add @xterm/addon-web-links @xterm/addon-search
 ```
 
 Notes:

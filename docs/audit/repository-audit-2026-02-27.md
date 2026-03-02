@@ -7,19 +7,19 @@ This audit covers backend, frontend, tests, CI, and operational scripts for the 
 ## Baseline Command Results
 
 - `pnpm test` -> failed (backend tests failed first)
-- `pnpm --filter @middleman/ui test` -> failed (`9` failed tests, `3` unhandled errors)
+- `pnpm --filter @nexus/ui test` -> failed (`9` failed tests, `3` unhandled errors)
 - `pnpm build` -> passed
 - `pnpm exec tsc --noEmit` -> failed at repo root (`Command "tsc" not found`)
-- `pnpm --filter @middleman/backend exec tsc -p tsconfig.build.json --noEmit` -> passed
-- `pnpm --filter @middleman/ui exec tsc --noEmit` -> passed
-- `pnpm --filter @middleman/site exec tsc --noEmit` -> passed
+- `pnpm --filter @nexus/backend exec tsc -p tsconfig.build.json --noEmit` -> passed
+- `pnpm --filter @nexus/ui exec tsc --noEmit` -> passed
+- `pnpm --filter @nexus/site exec tsc --noEmit` -> passed
 
 ## Findings (Deal-Breakers First)
 
 ### Critical
 
 1. CI is non-blocking and currently does not run intended checks.
-- Workflow uses `@swarm/*` filters, but packages are `@middleman/*`, so CI steps no-op.
+- Workflow uses `@swarm/*` filters, but packages are `@nexus/*`, so CI steps no-op.
 - Backend tests are marked `continue-on-error: true`.
 - Evidence:
   - `.github/workflows/ci.yml:35`

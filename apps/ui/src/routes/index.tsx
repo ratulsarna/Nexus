@@ -35,7 +35,7 @@ import { useFileDrop } from '@/hooks/index-page/use-file-drop'
 import type {
   ConversationAttachment,
   ManagerModelPreset,
-} from '@middleman/protocol'
+} from '@nexus/protocol'
 
 export const Route = createFileRoute('/')({
   component: IndexPage,
@@ -61,7 +61,7 @@ function resolveDefaultWsUrl(): string {
 }
 
 export function IndexPage() {
-  const wsUrl = import.meta.env.VITE_MIDDLEMAN_WS_URL ?? resolveDefaultWsUrl()
+  const wsUrl = import.meta.env.VITE_NEXUS_WS_URL ?? resolveDefaultWsUrl()
   const messageInputRef = useRef<MessageInputHandle | null>(null)
   const navigate = useOptionalNavigate()
   const location = useOptionalLocation()

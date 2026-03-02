@@ -1,5 +1,5 @@
 {
-  "name": "middleman",
+  "name": "nexus",
   "private": true,
   "license": "Apache-2.0",
   "packageManager": "pnpm@10.30.1",
@@ -11,16 +11,16 @@
     "packages/protocol"
   ],
   "scripts": {
-    "dev": "concurrently --kill-others-on-fail --names backend,ui \"pnpm --filter @middleman/backend dev\" \"pnpm --filter @middleman/ui dev -- --host ${MIDDLEMAN_HOST:-$(node --env-file-if-exists=.env -p 'process.env.MIDDLEMAN_HOST || \"127.0.0.1\"' 2>/dev/null)}\"",
-    "dev:backend": "pnpm --filter @middleman/backend dev",
-    "dev:ui": "pnpm --filter @middleman/ui dev -- --host ${MIDDLEMAN_HOST:-$(node --env-file-if-exists=.env -p 'process.env.MIDDLEMAN_HOST || \"127.0.0.1\"' 2>/dev/null)}",
-    "dev:site": "pnpm --filter @middleman/site dev",
-    "build": "pnpm --filter @middleman/backend build && pnpm --filter @middleman/ui build && pnpm --filter @middleman/site build",
+    "dev": "concurrently --kill-others-on-fail --names backend,ui \"pnpm --filter @nexus/backend dev\" \"pnpm --filter @nexus/ui dev -- --host ${NEXUS_HOST:-$(node --env-file-if-exists=.env -p 'process.env.NEXUS_HOST || \"127.0.0.1\"' 2>/dev/null)}\"",
+    "dev:backend": "pnpm --filter @nexus/backend dev",
+    "dev:ui": "pnpm --filter @nexus/ui dev -- --host ${NEXUS_HOST:-$(node --env-file-if-exists=.env -p 'process.env.NEXUS_HOST || \"127.0.0.1\"' 2>/dev/null)}",
+    "dev:site": "pnpm --filter @nexus/site dev",
+    "build": "pnpm --filter @nexus/backend build && pnpm --filter @nexus/ui build && pnpm --filter @nexus/site build",
     "prod": "pnpm build && pnpm prod:start",
-    "prod:start": "concurrently --kill-others-on-fail --names backend,ui \"NODE_ENV=production MIDDLEMAN_PORT=47287 pnpm --filter @middleman/backend start\" \"pnpm --filter @middleman/ui preview -- --port 47289 --strictPort --host ${MIDDLEMAN_HOST:-$(node --env-file-if-exists=.env -p 'process.env.MIDDLEMAN_HOST || \"127.0.0.1\"' 2>/dev/null)}\"",
+    "prod:start": "concurrently --kill-others-on-fail --names backend,ui \"NODE_ENV=production NEXUS_PORT=47287 pnpm --filter @nexus/backend start\" \"pnpm --filter @nexus/ui preview -- --port 47289 --strictPort --host ${NEXUS_HOST:-$(node --env-file-if-exists=.env -p 'process.env.NEXUS_HOST || \"127.0.0.1\"' 2>/dev/null)}\"",
     "prod:daemon": "node scripts/prod-daemon.mjs",
     "prod:restart": "node scripts/prod-daemon-restart.mjs",
-    "test": "pnpm --filter @middleman/backend test && pnpm --filter @middleman/ui test"
+    "test": "pnpm --filter @nexus/backend test && pnpm --filter @nexus/ui test"
   },
   "pnpm": {
     "overrides": {

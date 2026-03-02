@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils'
 import type {
   ConversationAttachment,
   ConversationImageAttachment,
-} from '@middleman/protocol'
+} from '@nexus/protocol'
 
 function MessageImageAttachments({
   attachments,

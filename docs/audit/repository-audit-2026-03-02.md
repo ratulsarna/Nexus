@@ -21,9 +21,9 @@ Under this lens, the right question is:
   - Backend: `16 passed files`, `155 passed tests`
   - UI: `3 failed files`, `9 failed tests`, `3` unhandled errors
 - `pnpm exec tsc --noEmit` -> failed at repo root (`Command "tsc" not found`)
-- `pnpm --filter @middleman/backend exec tsc -p tsconfig.build.json --noEmit` -> passed
-- `pnpm --filter @middleman/ui exec tsc --noEmit` -> passed
-- `pnpm --filter @middleman/site exec tsc --noEmit` -> passed
+- `pnpm --filter @nexus/backend exec tsc -p tsconfig.build.json --noEmit` -> passed
+- `pnpm --filter @nexus/ui exec tsc --noEmit` -> passed
+- `pnpm --filter @nexus/site exec tsc --noEmit` -> passed
 
 ## What Improved Since February 27
 
@@ -34,7 +34,7 @@ Under this lens, the right question is:
 - Current backend state: `155/155` passing.
 
 3. Protocol drift risk was reduced.
-- Backend/UI now share `@middleman/protocol` contracts.
+- Backend/UI now share `@nexus/protocol` contracts.
 - Evidence: `packages/protocol/src/index.ts:1`, `apps/backend/src/ws/ws-command-parser.ts:1`, `apps/ui/src/lib/ws-client.ts:19`
 
 4. Maintainability improved via decomposition.

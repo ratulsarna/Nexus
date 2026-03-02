@@ -5,7 +5,7 @@ import type {
   ConversationEntry,
   SlackStatusEvent,
   TelegramStatusEvent,
-} from '@middleman/protocol'
+} from '@nexus/protocol'
 
 export type ConversationHistoryEntry = Extract<
   ConversationEntry,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildManagerTreeRows, chooseFallbackAgentId, getPrimaryManagerId } from './agent-hierarchy'
-import type { AgentDescriptor } from '@middleman/protocol'
+import type { AgentDescriptor } from '@nexus/protocol'
 
 function manager(agentId: string, managerId = agentId): AgentDescriptor {
   return {

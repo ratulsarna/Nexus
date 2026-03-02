@@ -6,13 +6,13 @@ export const Route = createRootRoute({
     meta: [
       { charSet: 'utf-8' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { title: 'Middleman \u2014 Local-First AI Agent Orchestration' },
+      { title: 'Nexus \u2014 Local-First AI Agent Orchestration' },
       {
         name: 'description',
         content:
-          'Middleman is an open-source, local-first AI agent orchestration platform with manager/worker delegation, multi-model runtimes, and a real-time streaming interface.',
+          'Nexus is an open-source, local-first AI agent orchestration platform with manager/worker delegation, multi-model runtimes, and a real-time streaming interface.',
       },
-      { property: 'og:title', content: 'Middleman \u2014 Local-First AI Agent Orchestration' },
+      { property: 'og:title', content: 'Nexus \u2014 Local-First AI Agent Orchestration' },
       {
         property: 'og:description',
         content:

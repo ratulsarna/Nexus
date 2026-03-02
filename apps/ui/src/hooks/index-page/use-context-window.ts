@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { inferModelPreset } from '@/lib/model-preset'
 import type { ManagerWsState } from '@/lib/ws-state'
-import type { AgentContextUsage, AgentDescriptor, ConversationEntry, ManagerModelPreset } from '@middleman/protocol'
+import type { AgentContextUsage, AgentDescriptor, ConversationEntry, ManagerModelPreset } from '@nexus/protocol'
 
 const CHARS_PER_TOKEN_ESTIMATE = 4
 const CONTEXT_WINDOW_BY_PRESET: Record<ManagerModelPreset, number> = {

@@ -16,7 +16,7 @@ import {
   type DeliveryMode,
   type ManagerModelPreset,
   type ServerEvent,
-} from '@middleman/protocol'
+} from '@nexus/protocol'
 
 export type { ManagerWsState } from './ws-state'
 

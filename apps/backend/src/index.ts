@@ -96,7 +96,7 @@ async function main(): Promise<void> {
   });
   await wsServer.start();
 
-  console.log(`Middleman backend listening on ws://${config.host}:${config.port}`);
+  console.log(`Nexus backend listening on ws://${config.host}:${config.port}`);
 
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`Received ${signal}. Shutting down...`);
@@ -157,7 +157,7 @@ void main().catch((error) => {
     const config = createConfig();
     console.error(
       `Failed to start backend: ws://${config.host}:${config.port} is already in use. ` +
-        `Stop the other process or run with MIDDLEMAN_PORT=<port>.`
+        `Stop the other process or run with NEXUS_PORT=<port>.`
     );
   } else {
     console.error(error);

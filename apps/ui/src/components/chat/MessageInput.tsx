@@ -22,7 +22,7 @@ import {
 import { resolveApiEndpoint } from '@/lib/api-endpoint'
 import { transcribeVoice } from '@/lib/voice-transcription-client'
 import { cn } from '@/lib/utils'
-import type { ConversationAttachment } from '@middleman/protocol'
+import type { ConversationAttachment } from '@nexus/protocol'
 
 const TEXTAREA_MAX_HEIGHT = 186
 const ACTIVE_WAVEFORM_BAR_COUNT = 16

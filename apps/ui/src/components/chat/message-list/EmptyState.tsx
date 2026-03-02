@@ -1,7 +1,7 @@
 import { Button } from '@/components/ui/button'
 
 const suggestions = [
-  'Plan a middleman workflow',
+  'Plan a Nexus workflow',
   'Debug manager state',
   'Summarize latest run',
 ]

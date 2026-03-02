@@ -1,6 +1,6 @@
-# @middleman/ui
+# @nexus/ui
 
-`@middleman/ui` is the Middleman web app built with TanStack Start, Vite, and React.
+`@nexus/ui` is the Nexus web app built with TanStack Start, Vite, and React.
 
 ## What it contains
 
@@ -14,10 +14,10 @@
 Run from repo root:
 
 ```bash
-pnpm --filter @middleman/ui dev
-pnpm --filter @middleman/ui build
-pnpm --filter @middleman/ui preview
-pnpm --filter @middleman/ui test
+pnpm --filter @nexus/ui dev
+pnpm --filter @nexus/ui build
+pnpm --filter @nexus/ui preview
+pnpm --filter @nexus/ui test
 ```
 
 ## Local runtime

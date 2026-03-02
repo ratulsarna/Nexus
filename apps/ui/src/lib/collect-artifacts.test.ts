@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { collectArtifactsFromMessages } from './collect-artifacts'
-import type { ConversationEntry } from '@middleman/protocol'
+import type { ConversationEntry } from '@nexus/protocol'
 
 function assistantMessage(text: string): ConversationEntry {
   return {

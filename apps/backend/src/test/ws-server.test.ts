@@ -18,7 +18,7 @@ import type {
 import type { SwarmAgentRuntime } from '../swarm/runtime-types.js'
 import { getScheduleFilePath } from '../scheduler/schedule-storage.js'
 import { SwarmWebSocketServer } from '../ws/server.js'
-import type { ServerEvent } from '@middleman/protocol'
+import type { ServerEvent } from '@nexus/protocol'
 
 class FakeRuntime {
   readonly descriptor: AgentDescriptor

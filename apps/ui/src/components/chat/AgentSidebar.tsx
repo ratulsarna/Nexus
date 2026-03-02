@@ -5,7 +5,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { buildManagerTreeRows } from '@/lib/agent-hierarchy'
 import { inferModelPreset } from '@/lib/model-preset'
 import { cn } from '@/lib/utils'
-import type { AgentContextUsage, AgentDescriptor, AgentStatus, ManagerModelPreset } from '@middleman/protocol'
+import type { AgentContextUsage, AgentDescriptor, AgentStatus, ManagerModelPreset } from '@nexus/protocol'
 
 interface AgentSidebarProps {
   connected: boolean
