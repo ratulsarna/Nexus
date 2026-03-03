@@ -95,5 +95,43 @@ export async function handleManagerCommand(context: ManagerCommandRouteContext):
     return true;
   }
 
+  if (command.type === "update_manager") {
+    const managerContextId = resolveManagerContextAgentId(subscribedAgentId);
+    if (!managerContextId) {
+      send(socket, {
+        type: "error",
+        code: "UNKNOWN_AGENT",
+        message: `Agent ${subscribedAgentId} does not exist.`,
+        requestId: command.requestId
+      });
+      return true;
+    }
+
+    try {
+      const updated = await swarmManager.updateManager(managerContextId, {
+        managerId: command.managerId,
+        model: command.model,
+        thinkingLevel: command.thinkingLevel,
+        promptOverride: command.promptOverride
+      });
+
+      broadcastToSubscribed({
+        type: "manager_updated",
+        manager: updated.manager,
+        resetApplied: updated.resetApplied,
+        requestId: command.requestId
+      });
+    } catch (error) {
+      send(socket, {
+        type: "error",
+        code: "UPDATE_MANAGER_FAILED",
+        message: error instanceof Error ? error.message : String(error),
+        requestId: command.requestId
+      });
+    }
+
+    return true;
+  }
+
   return false;
 }

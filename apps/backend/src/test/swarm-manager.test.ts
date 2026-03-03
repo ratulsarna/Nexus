@@ -2151,6 +2151,83 @@ describe('SwarmManager', () => {
     expect(manager.listAgents().some((agent) => agent.agentId === ownedWorker.agentId)).toBe(false)
   })
 
+  it('does not reset manager runtime when update_manager has no effective change', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const initialDescriptor = manager.getAgent('manager')
+    const initialRuntime = manager.runtimeByAgentId.get('manager')
+
+    expect(initialDescriptor).toBeDefined()
+    expect(initialRuntime).toBeDefined()
+
+    const updated = await manager.updateManager('manager', {
+      managerId: 'manager',
+      model: 'pi-codex',
+    })
+
+    const finalDescriptor = manager.getAgent('manager')
+
+    expect(updated.resetApplied).toBe(false)
+    expect(initialRuntime?.terminateCalls).toEqual([])
+    expect(manager.createdRuntimeIds.filter((id) => id === 'manager')).toHaveLength(1)
+    expect(finalDescriptor?.updatedAt).toBe(initialDescriptor?.updatedAt)
+  })
+
+  it('applies update_manager model-first then thinking override and performs full reset', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const initialRuntime = manager.runtimeByAgentId.get('manager')
+    expect(initialRuntime).toBeDefined()
+
+    const updated = await manager.updateManager('manager', {
+      managerId: 'manager',
+      model: 'pi-opus',
+      thinkingLevel: 'low',
+    })
+
+    expect(updated.resetApplied).toBe(true)
+    expect(updated.manager.model).toEqual({
+      provider: 'anthropic',
+      modelId: 'claude-opus-4-6',
+      thinkingLevel: 'low',
+    })
+    expect(initialRuntime?.terminateCalls).toEqual([{ abort: true }])
+    expect(manager.createdRuntimeIds.filter((id) => id === 'manager')).toHaveLength(2)
+  })
+
+  it('sets and clears manager prompt override through update_manager', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const promptOverride = 'You are the manager override prompt.'
+
+    const withOverride = await manager.updateManager('manager', {
+      managerId: 'manager',
+      promptOverride,
+    })
+
+    expect(withOverride.resetApplied).toBe(true)
+    expect(withOverride.manager.promptOverride).toBe(promptOverride)
+    expect(manager.systemPromptByAgentId.get('manager')).toBe(promptOverride)
+
+    const cleared = await manager.updateManager('manager', {
+      managerId: 'manager',
+      promptOverride: '',
+    })
+
+    expect(cleared.resetApplied).toBe(true)
+    expect(cleared.manager.promptOverride).toBeUndefined()
+    expect(manager.systemPromptByAgentId.get('manager')).toContain(
+      'You are the manager agent in a multi-agent swarm.',
+    )
+    expect(manager.createdRuntimeIds.filter((id) => id === 'manager')).toHaveLength(3)
+  })
+
   it('maps create_manager model presets to canonical runtime models with highest reasoning', async () => {
     const config = await makeTempConfig()
     const manager = new TestSwarmManager(config)

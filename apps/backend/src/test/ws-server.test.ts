@@ -1710,6 +1710,125 @@ describe('SwarmWebSocketServer', () => {
     await server.stop()
   })
 
+  it('updates managers over websocket and emits manager_updated with reset metadata', async () => {
+    const port = await getAvailablePort()
+    const config = await makeTempConfig(port, true)
+
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const server = new SwarmWebSocketServer({
+      swarmManager: manager,
+      host: config.host,
+      port: config.port,
+      allowNonManagerSubscriptions: config.allowNonManagerSubscriptions,
+    })
+
+    await server.start()
+
+    const client = new WebSocket(`ws://${config.host}:${config.port}`)
+    const events: ServerEvent[] = []
+    client.on('message', (raw) => {
+      events.push(JSON.parse(raw.toString()) as ServerEvent)
+    })
+
+    await once(client, 'open')
+    client.send(JSON.stringify({ type: 'subscribe' }))
+    await waitForEvent(events, (event) => event.type === 'ready')
+
+    client.send(
+      JSON.stringify({
+        type: 'update_manager',
+        managerId: 'manager',
+        model: 'pi-codex',
+        requestId: 'req-noop',
+      }),
+    )
+
+    const noOpUpdated = await waitForEvent(
+      events,
+      (event) => event.type === 'manager_updated' && event.requestId === 'req-noop',
+    )
+    expect(noOpUpdated.type).toBe('manager_updated')
+    if (noOpUpdated.type === 'manager_updated') {
+      expect(noOpUpdated.resetApplied).toBe(false)
+      expect(noOpUpdated.manager.agentId).toBe('manager')
+      expect(noOpUpdated.manager.promptOverride).toBeUndefined()
+    }
+
+    client.send(
+      JSON.stringify({
+        type: 'update_manager',
+        managerId: 'manager',
+        promptOverride: 'You are the websocket override.',
+        requestId: 'req-change',
+      }),
+    )
+
+    const changedUpdated = await waitForEvent(
+      events,
+      (event) => event.type === 'manager_updated' && event.requestId === 'req-change',
+    )
+    expect(changedUpdated.type).toBe('manager_updated')
+    if (changedUpdated.type === 'manager_updated') {
+      expect(changedUpdated.resetApplied).toBe(true)
+      expect(changedUpdated.manager.promptOverride).toBe('You are the websocket override.')
+    }
+
+    client.close()
+    await once(client, 'close')
+    await server.stop()
+  })
+
+  it('rejects invalid update_manager payloads at websocket protocol validation time', async () => {
+    const port = await getAvailablePort()
+    const config = await makeTempConfig(port, true)
+
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const server = new SwarmWebSocketServer({
+      swarmManager: manager,
+      host: config.host,
+      port: config.port,
+      allowNonManagerSubscriptions: config.allowNonManagerSubscriptions,
+    })
+
+    await server.start()
+
+    const client = new WebSocket(`ws://${config.host}:${config.port}`)
+    const events: ServerEvent[] = []
+    client.on('message', (raw) => {
+      events.push(JSON.parse(raw.toString()) as ServerEvent)
+    })
+
+    await once(client, 'open')
+    client.send(JSON.stringify({ type: 'subscribe' }))
+    await waitForEvent(events, (event) => event.type === 'ready')
+
+    client.send(
+      JSON.stringify({
+        type: 'update_manager',
+        managerId: 'manager',
+        model: 'invalid-model',
+      }),
+    )
+
+    const invalidModelError = await waitForEvent(
+      events,
+      (event) =>
+        event.type === 'error' &&
+        event.code === 'INVALID_COMMAND' &&
+        event.message.includes('update_manager.model must be one of pi-codex|pi-opus|codex-app|claude-agent-sdk'),
+    )
+
+    expect(invalidModelError.type).toBe('error')
+
+    client.close()
+    await once(client, 'close')
+    await server.stop()
+  })
+
   it('deletes managers over websocket and emits manager_deleted', async () => {
     const port = await getAvailablePort()
     const config = await makeTempConfig(port, true)

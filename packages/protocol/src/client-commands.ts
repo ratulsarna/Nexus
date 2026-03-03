@@ -1,5 +1,5 @@
 import type { ConversationAttachment } from './attachments.js'
-import type { DeliveryMode, ManagerModelPreset } from './shared-types.js'
+import type { DeliveryMode, ManagerModelPreset, ThinkingLevel } from './shared-types.js'
 
 export type ClientCommand =
   | { type: 'subscribe'; agentId?: string }
@@ -14,6 +14,14 @@ export type ClientCommand =
   | { type: 'stop_all_agents'; managerId: string; requestId?: string }
   | { type: 'create_manager'; name: string; cwd: string; model?: ManagerModelPreset; requestId?: string }
   | { type: 'delete_manager'; managerId: string; requestId?: string }
+  | {
+      type: 'update_manager'
+      managerId: string
+      model?: ManagerModelPreset
+      thinkingLevel?: ThinkingLevel
+      promptOverride?: string
+      requestId?: string
+    }
   | { type: 'list_directories'; path?: string; requestId?: string }
   | { type: 'validate_directory'; path: string; requestId?: string }
   | { type: 'pick_directory'; defaultPath?: string; requestId?: string }

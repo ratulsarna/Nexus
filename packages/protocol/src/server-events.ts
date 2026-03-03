@@ -84,6 +84,13 @@ export interface ManagerDeletedEvent {
   requestId?: string
 }
 
+export interface ManagerUpdatedEvent {
+  type: 'manager_updated'
+  manager: AgentDescriptor
+  resetApplied: boolean
+  requestId?: string
+}
+
 export interface StopAllAgentsResultEvent {
   type: 'stop_all_agents_result'
   managerId: string
@@ -189,6 +196,7 @@ export type ServerEvent =
   | AgentsSnapshotEvent
   | ManagerCreatedEvent
   | ManagerDeletedEvent
+  | ManagerUpdatedEvent
   | StopAllAgentsResultEvent
   | DirectoriesListedEvent
   | DirectoryValidatedEvent

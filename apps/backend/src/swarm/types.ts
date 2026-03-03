@@ -57,6 +57,7 @@ export interface AgentDescriptor {
   role: AgentRole;
   managerId: string;
   archetypeId?: AgentArchetypeId;
+  promptOverride?: string;
   status: AgentStatus;
   createdAt: string;
   updatedAt: string;

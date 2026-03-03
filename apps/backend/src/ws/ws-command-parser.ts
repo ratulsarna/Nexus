@@ -1,4 +1,4 @@
-import type { ClientCommand } from "@nexus/protocol";
+import { THINKING_LEVELS, type ClientCommand, type ThinkingLevel } from "@nexus/protocol";
 import { type RawData } from "ws";
 import { parseConversationAttachments } from "./attachment-parser.js";
 import { describeSwarmModelPresets, isSwarmModelPreset } from "../swarm/model-presets.js";
@@ -6,6 +6,16 @@ import { describeSwarmModelPresets, isSwarmModelPreset } from "../swarm/model-pr
 export type ParsedClientCommand =
   | { ok: true; command: ClientCommand }
   | { ok: false; error: string };
+
+const VALID_THINKING_LEVEL_VALUES = new Set<string>(THINKING_LEVELS);
+
+function describeThinkingLevels(): string {
+  return THINKING_LEVELS.join("|");
+}
+
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return typeof value === "string" && VALID_THINKING_LEVEL_VALUES.has(value);
+}
 
 export function parseClientCommand(raw: RawData): ParsedClientCommand {
   const text = typeof raw === "string" ? raw : raw.toString("utf8");
@@ -119,6 +129,56 @@ export function parseClientCommand(raw: RawData): ParsedClientCommand {
       command: {
         type: "delete_manager",
         managerId: managerId.trim(),
+        requestId
+      }
+    };
+  }
+
+  if (maybe.type === "update_manager") {
+    const managerId = (maybe as { managerId?: unknown }).managerId;
+    const model = (maybe as { model?: unknown }).model;
+    const thinkingLevel = (maybe as { thinkingLevel?: unknown }).thinkingLevel;
+    const promptOverride = (maybe as { promptOverride?: unknown }).promptOverride;
+    const requestId = (maybe as { requestId?: unknown }).requestId;
+
+    if (typeof managerId !== "string" || managerId.trim().length === 0) {
+      return { ok: false, error: "update_manager.managerId must be a non-empty string" };
+    }
+    if (model !== undefined && !isSwarmModelPreset(model)) {
+      return {
+        ok: false,
+        error: `update_manager.model must be one of ${describeSwarmModelPresets()}`
+      };
+    }
+    if (thinkingLevel !== undefined && !isThinkingLevel(thinkingLevel)) {
+      return {
+        ok: false,
+        error: `update_manager.thinkingLevel must be one of ${describeThinkingLevels()}`
+      };
+    }
+    if (promptOverride !== undefined && typeof promptOverride !== "string") {
+      return { ok: false, error: "update_manager.promptOverride must be a string when provided" };
+    }
+    if (requestId !== undefined && typeof requestId !== "string") {
+      return { ok: false, error: "update_manager.requestId must be a string when provided" };
+    }
+    if (model === undefined && thinkingLevel === undefined && promptOverride === undefined) {
+      return {
+        ok: false,
+        error: "update_manager must include at least one of model|thinkingLevel|promptOverride"
+      };
+    }
+
+    const normalizedThinkingLevel = thinkingLevel as ThinkingLevel | undefined;
+
+    return {
+      ok: true,
+      command: {
+        type: "update_manager",
+        managerId: managerId.trim(),
+        model,
+        thinkingLevel: normalizedThinkingLevel,
+        promptOverride,
         requestId
       }
     };
@@ -240,6 +300,7 @@ export function extractRequestId(command: ClientCommand): string | undefined {
   switch (command.type) {
     case "create_manager":
     case "delete_manager":
+    case "update_manager":
     case "stop_all_agents":
     case "list_directories":
     case "validate_directory":

@@ -59,6 +59,7 @@ import type {
   SwarmAgentRuntime
 } from "./runtime-types.js";
 import type { SwarmToolHost } from "./swarm-tools.js";
+import { THINKING_LEVELS } from "./types.js";
 import type {
   AgentMessageEvent,
   AgentContextUsage,
@@ -81,7 +82,8 @@ import type {
   SkillEnvRequirement,
   SpawnAgentInput,
   SwarmConfig,
-  SwarmModelPreset
+  SwarmModelPreset,
+  ThinkingLevel
 } from "./types.js";
 
 const DEFAULT_WORKER_SYSTEM_PROMPT = `You are a worker agent in a swarm.
@@ -129,6 +131,7 @@ If they agree, summarize the choices and persist them using the memory workflow.
 // Retain recent non-web activity while preserving the full user-facing web transcript.
 const SWARM_CONTEXT_FILE_NAME = "SWARM.md";
 const SWARM_MANAGER_MAX_EVENT_LISTENERS = 64;
+const VALID_THINKING_LEVEL_VALUES = new Set<string>(THINKING_LEVELS);
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -658,6 +661,85 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
     });
 
     return { managerId: targetManagerId, terminatedWorkerIds };
+  }
+
+  async updateManager(
+    callerAgentId: string,
+    input: {
+      managerId: string;
+      model?: SwarmModelPreset;
+      thinkingLevel?: ThinkingLevel;
+      promptOverride?: string;
+    }
+  ): Promise<{ manager: AgentDescriptor; resetApplied: boolean }> {
+    this.assertManager(callerAgentId, "update managers");
+    const target = this.getRequiredManagerDescriptor(input.managerId);
+
+    const currentPromptOverride = normalizePromptOverride(target.promptOverride);
+    const requestedModelPreset = parseSwarmModelPreset(input.model, "update_manager.model");
+    const requestedThinkingLevel = parseThinkingLevel(input.thinkingLevel, "update_manager.thinkingLevel");
+    const hasPromptOverridePatch = input.promptOverride !== undefined;
+
+    let nextModel: AgentModelDescriptor = target.model;
+    if (requestedModelPreset) {
+      nextModel = resolveModelDescriptorFromPreset(requestedModelPreset, {
+        presetDefinitions: this.modelPresetDefinitions
+      });
+    }
+    if (requestedThinkingLevel) {
+      nextModel = {
+        ...nextModel,
+        thinkingLevel: requestedThinkingLevel
+      };
+    }
+
+    const nextPromptOverride = hasPromptOverridePatch
+      ? normalizePromptOverride(input.promptOverride)
+      : currentPromptOverride;
+
+    const modelChanged =
+      target.model.provider !== nextModel.provider ||
+      target.model.modelId !== nextModel.modelId ||
+      target.model.thinkingLevel !== nextModel.thinkingLevel;
+    const promptOverrideChanged = currentPromptOverride !== nextPromptOverride;
+    const shouldReset = modelChanged || promptOverrideChanged;
+
+    if (!shouldReset) {
+      this.logDebug("manager:update:no_effective_change", {
+        callerAgentId,
+        managerId: target.agentId
+      });
+
+      return {
+        manager: cloneDescriptor(target),
+        resetApplied: false
+      };
+    }
+
+    target.model = nextModel;
+    if (nextPromptOverride) {
+      target.promptOverride = nextPromptOverride;
+    } else {
+      delete target.promptOverride;
+    }
+    target.updatedAt = this.now();
+    this.descriptors.set(target.agentId, target);
+    await this.saveStore();
+
+    this.logDebug("manager:update:applied", {
+      callerAgentId,
+      managerId: target.agentId,
+      modelChanged,
+      promptOverrideChanged
+    });
+
+    await this.resetManagerSession(target.agentId, "api_reset");
+
+    const updated = this.getRequiredManagerDescriptor(target.agentId);
+    return {
+      manager: cloneDescriptor(updated),
+      resetApplied: true
+    };
   }
 
   getAgent(agentId: string): AgentDescriptor | undefined {
@@ -1605,6 +1687,10 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
 
   private resolveSystemPromptForDescriptor(descriptor: AgentDescriptor): string {
     if (descriptor.role === "manager") {
+      const promptOverride = normalizePromptOverride(descriptor.promptOverride);
+      if (promptOverride) {
+        return promptOverride;
+      }
       return this.resolveRequiredArchetypePrompt(MANAGER_ARCHETYPE_ID);
     }
 
@@ -2159,6 +2245,10 @@ function validateAgentDescriptor(value: unknown): AgentDescriptor | string {
     return "archetypeId must be a string when provided";
   }
 
+  if (value.promptOverride !== undefined && typeof value.promptOverride !== "string") {
+    return "promptOverride must be a string when provided";
+  }
+
   const descriptor = value as unknown as AgentDescriptor;
   if (descriptor.status === normalizedStatus) {
     return descriptor;
@@ -2201,6 +2291,26 @@ function normalizeOptionalAgentId(input: string | undefined): string | undefined
   }
 
   const trimmed = input.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function parseThinkingLevel(value: unknown, fieldName: string): ThinkingLevel | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string" || !VALID_THINKING_LEVEL_VALUES.has(value)) {
+    throw new Error(`${fieldName} must be one of ${THINKING_LEVELS.join("|")}`);
+  }
+
+  return value as ThinkingLevel;
+}
+
+function normalizePromptOverride(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }
 

@@ -24,6 +24,7 @@ export interface AgentDescriptor {
   displayName: string
   role: 'manager' | 'worker'
   archetypeId?: string
+  promptOverride?: string
   status: AgentStatus
   createdAt: string
   updatedAt: string
