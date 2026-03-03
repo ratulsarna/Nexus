@@ -10,7 +10,9 @@ import type { AgentDescriptor } from "../swarm/types.js";
 const sdkMockState = vi.hoisted(() => ({
   queryCalls: [] as Array<{ prompt: string; options?: Record<string, unknown> }>,
   streams: [] as Array<unknown[]>,
-  mcpServerCalls: [] as Array<{ name: string; tools?: Array<{ inputSchema?: unknown }> }>
+  mcpServerCalls: [] as Array<{ name: string; tools?: Array<{ inputSchema?: unknown }> }>,
+  supportedModelsResponses: [] as unknown[],
+  supportedModelsCallCount: 0
 }));
 
 const oauthRefreshMockState = vi.hoisted(() => ({
@@ -29,6 +31,15 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
     let isClosed = false;
 
     return {
+      async supportedModels() {
+        sdkMockState.supportedModelsCallCount += 1;
+        const response = sdkMockState.supportedModelsResponses.shift();
+        if (response && typeof response === "object" && "__throw" in (response as Record<string, unknown>)) {
+          throw new Error(String((response as { __throw: unknown }).__throw));
+        }
+
+        return Array.isArray(response) ? response : [];
+      },
       async *[Symbol.asyncIterator]() {
         for (const message of messages) {
           if (isClosed) {
@@ -139,6 +150,8 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
     sdkMockState.queryCalls = [];
     sdkMockState.streams = [];
     sdkMockState.mcpServerCalls = [];
+    sdkMockState.supportedModelsResponses = [];
+    sdkMockState.supportedModelsCallCount = 0;
     vi.clearAllMocks();
   });
 
@@ -310,6 +323,179 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
     expect(env?.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
     expect(settingSources).toEqual(["project"]);
+
+    await runtime.terminate({ abort: true });
+  });
+
+  it("maps canonical thinking level to deterministic Claude thinking/effort with safe static clamp", async () => {
+    sdkMockState.streams.push([
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "session-reasoning-floor",
+        usage: undefined,
+        modelUsage: {}
+      }
+    ]);
+
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+
+    setAuthCredential(authFile, "claude-agent-sdk", {
+      type: "oauth",
+      access: "claude-oauth-token",
+      refresh: "claude-refresh-token",
+      expires: String(Date.now() + 60_000)
+    } as unknown as AuthCredential);
+
+    const runtime = await ClaudeAgentSdkRuntime.create({
+      descriptor: createDescriptor(rootDir),
+      callbacks: {
+        onStatusChange: async () => {}
+      },
+      systemPrompt: "You are a worker",
+      tools: [],
+      authFile
+    });
+
+    await runtime.sendMessage("apply canonical mapping");
+    await waitFor(() => runtime.getPendingCount() === 0 && runtime.getStatus() === "idle");
+
+    expect(sdkMockState.supportedModelsCallCount).toBe(0);
+    expect(sdkMockState.queryCalls).toHaveLength(1);
+    expect(sdkMockState.queryCalls[0]?.options?.thinking).toEqual({ type: "enabled" });
+    expect(sdkMockState.queryCalls[0]?.options?.effort).toBe("high");
+
+    await runtime.terminate({ abort: true });
+  });
+
+  it("keeps mapped low effort for minimal thinking level under static clamp bounds", async () => {
+    sdkMockState.streams.push([
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "session-reasoning-min-floor",
+        usage: undefined,
+        modelUsage: {}
+      }
+    ]);
+
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+    const descriptor = createDescriptor(rootDir);
+    descriptor.model.thinkingLevel = "minimal";
+
+    setAuthCredential(authFile, "claude-agent-sdk", {
+      type: "oauth",
+      access: "claude-oauth-token",
+      refresh: "claude-refresh-token",
+      expires: String(Date.now() + 60_000)
+    } as unknown as AuthCredential);
+
+    const runtime = await ClaudeAgentSdkRuntime.create({
+      descriptor,
+      callbacks: {
+        onStatusChange: async () => {}
+      },
+      systemPrompt: "You are a worker",
+      tools: [],
+      authFile
+    });
+
+    await runtime.sendMessage("apply minimum floor");
+    await waitFor(() => runtime.getPendingCount() === 0 && runtime.getStatus() === "idle");
+
+    expect(sdkMockState.queryCalls).toHaveLength(1);
+    expect(sdkMockState.queryCalls[0]?.options?.effort).toBe("low");
+    expect(sdkMockState.queryCalls[0]?.options?.thinking).toEqual({ type: "enabled" });
+
+    await runtime.terminate({ abort: true });
+  });
+
+  it("does not probe model capabilities on query path", async () => {
+    sdkMockState.supportedModelsResponses.push({
+      __throw: "supportedModels unavailable"
+    });
+    sdkMockState.streams.push([
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "session-reasoning-fallback",
+        usage: undefined,
+        modelUsage: {}
+      }
+    ]);
+
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+
+    setAuthCredential(authFile, "claude-agent-sdk", {
+      type: "oauth",
+      access: "claude-oauth-token",
+      refresh: "claude-refresh-token",
+      expires: String(Date.now() + 60_000)
+    } as unknown as AuthCredential);
+
+    const runtime = await ClaudeAgentSdkRuntime.create({
+      descriptor: createDescriptor(rootDir),
+      callbacks: {
+        onStatusChange: async () => {}
+      },
+      systemPrompt: "You are a worker",
+      tools: [],
+      authFile
+    });
+
+    await runtime.sendMessage("capabilities unavailable fallback");
+    await waitFor(() => runtime.getPendingCount() === 0 && runtime.getStatus() === "idle");
+
+    expect(sdkMockState.supportedModelsCallCount).toBe(0);
+    expect(sdkMockState.queryCalls).toHaveLength(1);
+    expect(sdkMockState.queryCalls[0]?.options?.thinking).toEqual({ type: "enabled" });
+    expect(sdkMockState.queryCalls[0]?.options?.effort).toBe("high");
+
+    await runtime.terminate({ abort: true });
+  });
+
+  it("disables thinking and omits effort for off thinking level", async () => {
+    sdkMockState.streams.push([
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "session-thinking-off",
+        usage: undefined,
+        modelUsage: {}
+      }
+    ]);
+
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+    const descriptor = createDescriptor(rootDir);
+    descriptor.model.thinkingLevel = "off";
+
+    setAuthCredential(authFile, "claude-agent-sdk", {
+      type: "oauth",
+      access: "claude-oauth-token",
+      refresh: "claude-refresh-token",
+      expires: String(Date.now() + 60_000)
+    } as unknown as AuthCredential);
+
+    const runtime = await ClaudeAgentSdkRuntime.create({
+      descriptor,
+      callbacks: {
+        onStatusChange: async () => {}
+      },
+      systemPrompt: "You are a worker",
+      tools: [],
+      authFile
+    });
+
+    await runtime.sendMessage("thinking off");
+    await waitFor(() => runtime.getPendingCount() === 0 && runtime.getStatus() === "idle");
+
+    expect(sdkMockState.queryCalls).toHaveLength(1);
+    expect(sdkMockState.queryCalls[0]?.options?.thinking).toEqual({ type: "disabled" });
+    expect(sdkMockState.queryCalls[0]?.options?.effort).toBeUndefined();
 
     await runtime.terminate({ abort: true });
   });
@@ -801,8 +987,8 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
     });
 
     await runtime.sendMessage("retry stale resume");
+    await waitFor(() => sdkMockState.queryCalls.length >= 2);
     await waitFor(() => runtime.getPendingCount() === 0 && runtime.getStatus() === "idle");
-
     expect(sdkMockState.queryCalls).toHaveLength(2);
     expect(sdkMockState.queryCalls[0]?.options?.resume).toBe("stale-session");
     expect(sdkMockState.queryCalls[1]?.options?.resume).toBeUndefined();
@@ -874,6 +1060,7 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
     });
 
     await runtime.sendMessage("recover no conversation found");
+    await waitFor(() => sdkMockState.queryCalls.length >= 2);
     await waitFor(() => runtime.getPendingCount() === 0 && runtime.getStatus() === "idle");
 
     expect(sdkMockState.queryCalls).toHaveLength(2);
@@ -932,6 +1119,7 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
 
     await runtime.sendMessage("do not retry");
     await waitFor(() => runtimeErrors.length > 0);
+    await waitFor(() => runtime.getPendingCount() === 0 && runtime.getStatus() === "idle");
 
     expect(sdkMockState.queryCalls).toHaveLength(1);
     expect(sdkMockState.queryCalls[0]?.options?.resume).toBe("stale-session");
@@ -996,6 +1184,7 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
       });
 
       await runtime.sendMessage("trigger settings failure fallback");
+      await waitFor(() => sdkMockState.queryCalls.length >= 2);
       await waitFor(() => runtime.getPendingCount() === 0 && runtime.getStatus() === "idle");
 
       expect(sdkMockState.queryCalls).toHaveLength(2);
@@ -1080,6 +1269,7 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
 
       await runtime.sendMessage("trigger double settings failure");
       await waitFor(() => runtimeErrors.length > 0);
+      await waitFor(() => runtime.getPendingCount() === 0 && runtime.getStatus() === "idle");
 
       expect(sdkMockState.queryCalls).toHaveLength(2);
       expect(sdkMockState.queryCalls[0]?.options?.settingSources).toEqual(["project"]);

@@ -292,6 +292,9 @@ export class RuntimeFactory {
         SWARM_MEMORY_FILE: memoryResources.memoryContextFile.path,
         CLAUDE_CONFIG_DIR: resolve(this.deps.config.paths.dataDir, "claude-code")
       },
+      thinkingLevelToConfig:
+        this.deps.config.providerThinkingLevelMappings?.claudeAgentSdk ??
+        DEFAULT_PROVIDER_THINKING_LEVEL_MAPPINGS.claudeAgentSdk,
       settingsPolicy: {
         primarySources: [...CLAUDE_PROJECT_ONLY_SETTINGS_POLICY.primarySources],
         fallbackSources: [...CLAUDE_PROJECT_ONLY_SETTINGS_POLICY.fallbackSources],

@@ -64,10 +64,19 @@ function createRuntimeStub(descriptor: AgentDescriptor) {
 function createFactory() {
   const codexThinkingLevelToEffort = {
     off: "none",
+    minimal: "minimal",
     low: "minimal",
     medium: "low",
     high: "medium",
     xhigh: "high"
+  } as const;
+  const claudeThinkingLevelToConfig = {
+    off: { thinking: "disabled" },
+    minimal: { thinking: "enabled", effort: "low" },
+    low: { thinking: "enabled", effort: "low" },
+    medium: { thinking: "enabled", effort: "medium" },
+    high: { thinking: "enabled", effort: "high" },
+    xhigh: { thinking: "enabled", effort: "max" }
   } as const;
 
   const config = {
@@ -76,7 +85,8 @@ function createFactory() {
       authFile: "/tmp/swarm-data/auth/auth.json"
     },
     providerThinkingLevelMappings: {
-      codexAppServer: codexThinkingLevelToEffort
+      codexAppServer: codexThinkingLevelToEffort,
+      claudeAgentSdk: claudeThinkingLevelToConfig
     }
   } as SwarmConfig;
 
@@ -147,6 +157,7 @@ describe("RuntimeFactory", () => {
       authFile: string;
       runtimeEnv: Record<string, string>;
       systemPrompt: string;
+      thinkingLevelToConfig: Record<string, { thinking: string; effort?: string }>;
       settingsPolicy: {
         primarySources: string[];
         fallbackSources: string[];
@@ -162,6 +173,14 @@ describe("RuntimeFactory", () => {
     expect(call.systemPrompt).toContain("Base system prompt");
     expect(call.systemPrompt).toContain("Repository policy context.");
     expect(call.systemPrompt).toContain("Persist this context.");
+    expect(call.thinkingLevelToConfig).toEqual({
+      off: { thinking: "disabled" },
+      minimal: { thinking: "enabled", effort: "low" },
+      low: { thinking: "enabled", effort: "low" },
+      medium: { thinking: "enabled", effort: "medium" },
+      high: { thinking: "enabled", effort: "high" },
+      xhigh: { thinking: "enabled", effort: "max" }
+    });
     expect(call.settingsPolicy).toEqual({
       primarySources: ["project"],
       fallbackSources: [],
@@ -183,6 +202,7 @@ describe("RuntimeFactory", () => {
     };
     expect(call.thinkingLevelToEffort).toEqual({
       off: "none",
+      minimal: "minimal",
       low: "minimal",
       medium: "low",
       high: "medium",

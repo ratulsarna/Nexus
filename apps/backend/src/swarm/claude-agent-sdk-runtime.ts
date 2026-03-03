@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import {
   createSdkMcpServer,
   query,
+  type ThinkingConfig,
   type SettingSource,
   type Query,
   type SDKAssistantMessage,
@@ -15,6 +16,7 @@ import {
 import { refreshAnthropicToken } from "@mariozechner/pi-ai/dist/utils/oauth/anthropic.js";
 import { AuthStorage, SessionManager, type AuthCredential, type ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { z, type ZodType } from "zod";
+import { DEFAULT_PROVIDER_THINKING_LEVEL_MAPPINGS } from "./model-preset-config.js";
 import { transitionAgentStatus } from "./agent-state-machine.js";
 import {
   normalizeRuntimeError,
@@ -30,10 +32,13 @@ import type {
 } from "./runtime-types.js";
 import type {
   AgentContextUsage,
+  ClaudeReasoningEffort,
+  ClaudeThinkingMode,
   AgentDescriptor,
   AgentStatus,
   RequestedDeliveryMode,
-  SendMessageReceipt
+  SendMessageReceipt,
+  ThinkingLevel
 } from "./types.js";
 
 const AUTH_REQUIRED_ERROR_CODE = "CLAUDE_AGENT_SDK_AUTH_REQUIRED";
@@ -41,6 +46,13 @@ const RESUME_RECOVERY_ERROR_CODE = "CLAUDE_AGENT_SDK_RESUME_RECOVERY";
 const TOOL_MCP_SERVER_NAME = "swarm-tools";
 const CLAUDE_RUNTIME_STATE_ENTRY_TYPE = "swarm_claude_agent_sdk_runtime_state";
 const CLAUDE_RUNTIME_STATE_FILE_SUFFIX = ".claude-runtime-state.json";
+const CLAUDE_EFFORT_RANK: Record<ClaudeReasoningEffort, number> = {
+  low: 1,
+  medium: 2,
+  high: 3,
+  max: 4
+};
+const CLAUDE_FALLBACK_SUPPORTED_EFFORTS: ClaudeReasoningEffort[] = ["low", "medium", "high"];
 
 interface PendingDelivery {
   deliveryId: string;
@@ -64,6 +76,19 @@ interface ClaudeSettingsPolicy {
   primarySources: SettingSource[];
   fallbackSources: SettingSource[];
   enableFallbackOnReadError: boolean;
+}
+
+interface ClaudeRequestedReasoningConfig {
+  thinking: ClaudeThinkingMode;
+  effort?: ClaudeReasoningEffort;
+}
+
+interface ClaudeResolvedReasoningConfig {
+  requestedThinking: ClaudeThinkingMode;
+  effectiveThinking: ClaudeThinkingMode;
+  thinkingConfig: ThinkingConfig;
+  requestedEffort?: ClaudeReasoningEffort;
+  effectiveEffort?: ClaudeReasoningEffort;
 }
 
 interface ClaudeExecutionErrorDetails extends Record<string, unknown> {
@@ -99,6 +124,7 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
   private readonly sessionManager: SessionManager;
   private readonly runtimeEnv: Record<string, string | undefined>;
   private readonly settingsPolicy: ClaudeSettingsPolicy;
+  private readonly thinkingLevelToConfig: Record<ThinkingLevel, ClaudeRequestedReasoningConfig>;
   private readonly sdkMcpServer: ReturnType<typeof createSdkMcpServer>;
   private readonly runtimeStateFile: string;
 
@@ -125,6 +151,7 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
     authFile: string;
     runtimeEnv?: Record<string, string | undefined>;
     settingsPolicy?: Partial<ClaudeSettingsPolicy>;
+    thinkingLevelToConfig?: Record<ThinkingLevel, ClaudeRequestedReasoningConfig>;
   }) {
     this.descriptor = options.descriptor;
     this.callbacks = options.callbacks;
@@ -139,6 +166,9 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
       ...options.runtimeEnv
     };
     this.settingsPolicy = normalizeSettingsPolicy(options.settingsPolicy);
+    this.thinkingLevelToConfig = {
+      ...(options.thinkingLevelToConfig ?? DEFAULT_PROVIDER_THINKING_LEVEL_MAPPINGS.claudeAgentSdk)
+    };
 
     this.sdkMcpServer = createSdkMcpServer({
       name: TOOL_MCP_SERVER_NAME,
@@ -189,6 +219,7 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
     authFile: string;
     runtimeEnv?: Record<string, string | undefined>;
     settingsPolicy?: Partial<ClaudeSettingsPolicy>;
+    thinkingLevelToConfig?: Record<ThinkingLevel, ClaudeRequestedReasoningConfig>;
   }): Promise<ClaudeAgentSdkRuntime> {
     const runtime = new ClaudeAgentSdkRuntime(options);
 
@@ -413,12 +444,12 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
     const auth = await this.resolveAuthToken();
     const prompt = this.toPromptText(delivery.message);
     const settingSources = this.resolveSettingSources(delivery.deliveryId);
-    this.logQueryAttempt(delivery.deliveryId, settingSources);
     this.validateProjectSettingsReadableOrThrow(settingSources);
     const abortController = new AbortController();
     const sessionIdAtStart = this.sessionId;
     const attemptedResumeId = sessionIdAtStart;
     const usedResume = typeof attemptedResumeId === "string" && attemptedResumeId.length > 0;
+    const requestedReasoning = this.resolveRequestedReasoningConfig();
 
     this.currentAbortController = abortController;
     const stderrChunks: string[] = [];
@@ -429,40 +460,23 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
     let toolSummaryEventCount = 0;
     let authStatusEventCount = 0;
     let resultMessageCount = 0;
+    const effectiveReasoning = this.resolveEffectiveReasoningConfig(requestedReasoning);
 
-    this.currentQuery = query({
+    this.currentQuery = this.createClaudeQuery({
       prompt,
-      options: {
-        cwd: this.descriptor.cwd,
-        model: this.descriptor.model.modelId,
-        systemPrompt: this.systemPrompt,
-        settingSources,
-        permissionMode: "bypassPermissions",
-        allowDangerouslySkipPermissions: true,
-        includePartialMessages: false,
-        mcpServers: {
-          [TOOL_MCP_SERVER_NAME]: this.sdkMcpServer
-        },
-        env: this.buildRuntimeEnv(auth),
-        abortController,
-        // Avoid surfacing raw SDK stderr lines directly to user-visible runtime errors.
-        stderr: (data) => {
-          const trimmed = data.trim();
-          if (!trimmed) {
-            return;
-          }
-
-          if (stderrChunks.length < 5) {
-            stderrChunks.push(trimmed);
-          }
-        },
-        ...(attemptedResumeId
-          ? {
-              resume: attemptedResumeId
-            }
-          : {})
+      settingSources,
+      auth,
+      abortController,
+      attemptedResumeId,
+      reasoning: effectiveReasoning,
+      onStderr: (trimmed) => {
+        if (stderrChunks.length < 5) {
+          stderrChunks.push(trimmed);
+        }
       }
     });
+
+    this.logQueryAttempt(delivery.deliveryId, settingSources, effectiveReasoning, attemptedResumeId);
 
     let resultMessage: SDKResultMessage | undefined;
     let lastAssistantError: SDKAssistantMessageError | undefined;
@@ -860,6 +874,96 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
     return env;
   }
 
+  private createClaudeQuery(options: {
+    prompt: string;
+    settingSources: SettingSource[];
+    auth: AuthTokenResolution;
+    abortController: AbortController;
+    attemptedResumeId?: string;
+    reasoning: ClaudeResolvedReasoningConfig;
+    onStderr: (trimmed: string) => void;
+  }): Query {
+    return query({
+      prompt: options.prompt,
+      options: {
+        cwd: this.descriptor.cwd,
+        model: this.descriptor.model.modelId,
+        systemPrompt: this.systemPrompt,
+        settingSources: options.settingSources,
+        permissionMode: "bypassPermissions",
+        allowDangerouslySkipPermissions: true,
+        includePartialMessages: false,
+        mcpServers: {
+          [TOOL_MCP_SERVER_NAME]: this.sdkMcpServer
+        },
+        env: this.buildRuntimeEnv(options.auth),
+        abortController: options.abortController,
+        thinking: options.reasoning.thinkingConfig,
+        ...(options.reasoning.effectiveEffort
+          ? {
+              effort: options.reasoning.effectiveEffort
+            }
+          : {}),
+        // Avoid surfacing raw SDK stderr lines directly to user-visible runtime errors.
+        stderr: (data) => {
+          const trimmed = data.trim();
+          if (!trimmed) {
+            return;
+          }
+
+          options.onStderr(trimmed);
+        },
+        ...(options.attemptedResumeId
+          ? {
+              resume: options.attemptedResumeId
+            }
+          : {})
+      }
+    });
+  }
+
+  private resolveRequestedReasoningConfig(): ClaudeRequestedReasoningConfig {
+    const thinkingLevel = normalizeThinkingLevel(this.descriptor.model.thinkingLevel);
+    const mapped = this.thinkingLevelToConfig[thinkingLevel] ?? this.thinkingLevelToConfig.medium;
+    return {
+      thinking: mapped.thinking,
+      effort: mapped.effort
+    };
+  }
+
+  private resolveEffectiveReasoningConfig(requested: ClaudeRequestedReasoningConfig): ClaudeResolvedReasoningConfig {
+    const effectiveThinking = requested.thinking;
+    const thinkingConfig: ThinkingConfig =
+      effectiveThinking === "disabled"
+        ? { type: "disabled" }
+        : effectiveThinking === "adaptive"
+          ? { type: "adaptive" }
+          : { type: "enabled" };
+
+    if (effectiveThinking === "disabled") {
+      return {
+        requestedThinking: requested.thinking,
+        effectiveThinking,
+        thinkingConfig,
+        requestedEffort: requested.effort,
+        effectiveEffort: undefined
+      };
+    }
+
+    const effortCapabilities = CLAUDE_FALLBACK_SUPPORTED_EFFORTS;
+    const effectiveEffort = requested.effort
+      ? clampClaudeEffortToSupportedFloor(requested.effort, effortCapabilities)
+      : undefined;
+
+    return {
+      requestedThinking: requested.thinking,
+      effectiveThinking,
+      thinkingConfig,
+      requestedEffort: requested.effort,
+      effectiveEffort
+    };
+  }
+
   private resolveSettingSources(deliveryId: string): SettingSource[] {
     if (this.fallbackSettingsDeliveryIds.has(deliveryId)) {
       return [...this.settingsPolicy.fallbackSources];
@@ -924,13 +1028,30 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
     });
   }
 
-  private logQueryAttempt(deliveryId: string, settingSources: SettingSource[]): void {
+  private logQueryAttempt(
+    deliveryId: string,
+    settingSources: SettingSource[],
+    reasoning: ClaudeResolvedReasoningConfig,
+    attemptedResumeId: string | undefined
+  ): void {
     console.info(`[swarm][${this.now()}] runtime:query_attempt`, {
       runtime: "claude-agent-sdk",
       event: "query_attempt",
       agentId: this.descriptor.agentId,
       deliveryId,
-      settingSources
+      model: this.descriptor.model.modelId,
+      settingSources,
+      resume: attemptedResumeId,
+      thinkingOption: reasoning.thinkingConfig,
+      effortOption: reasoning.effectiveEffort,
+      requestedThinking: reasoning.requestedThinking,
+      effectiveThinking: reasoning.effectiveThinking,
+      requestedEffort: reasoning.requestedEffort,
+      effectiveEffort: reasoning.effectiveEffort,
+      effortClamped:
+        typeof reasoning.requestedEffort === "string" &&
+        typeof reasoning.effectiveEffort === "string" &&
+        reasoning.requestedEffort !== reasoning.effectiveEffort
     });
   }
 
@@ -1416,6 +1537,47 @@ function toRuntimeMessageContent(content: unknown): Array<{ type: "text" | "imag
   }
 
   return normalized;
+}
+
+function clampClaudeEffortToSupportedFloor(
+  requestedEffort: ClaudeReasoningEffort,
+  supportedEfforts: ClaudeReasoningEffort[]
+): ClaudeReasoningEffort {
+  if (supportedEfforts.length === 0) {
+    return requestedEffort;
+  }
+
+  const requestedRank = CLAUDE_EFFORT_RANK[requestedEffort];
+  let floorEffort: ClaudeReasoningEffort | undefined;
+
+  for (const effort of supportedEfforts) {
+    if (CLAUDE_EFFORT_RANK[effort] > requestedRank) {
+      break;
+    }
+    floorEffort = effort;
+  }
+
+  return floorEffort ?? supportedEfforts[0];
+}
+
+function normalizeThinkingLevel(value: string): ThinkingLevel {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "x-high") {
+    return "xhigh";
+  }
+
+  if (
+    normalized === "off" ||
+    normalized === "minimal" ||
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high" ||
+    normalized === "xhigh"
+  ) {
+    return normalized;
+  }
+
+  return "medium";
 }
 
 function extractAuthToken(credential: AuthCredential): string | undefined {
