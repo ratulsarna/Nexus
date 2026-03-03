@@ -1782,6 +1782,30 @@ describe('SwarmWebSocketServer', () => {
       expect(changedUpdated.manager.promptOverride).toBe('You are the websocket override.')
     }
 
+    client.send(
+      JSON.stringify({
+        type: 'update_manager',
+        managerId: 'manager',
+        provider: 'anthropic',
+        modelId: 'claude-sonnet-4-5',
+        requestId: 'req-explicit',
+      }),
+    )
+
+    const explicitUpdated = await waitForEvent(
+      events,
+      (event) => event.type === 'manager_updated' && event.requestId === 'req-explicit',
+    )
+    expect(explicitUpdated.type).toBe('manager_updated')
+    if (explicitUpdated.type === 'manager_updated') {
+      expect(explicitUpdated.resetApplied).toBe(true)
+      expect(explicitUpdated.manager.model).toEqual({
+        provider: 'anthropic',
+        modelId: 'claude-sonnet-4-5',
+        thinkingLevel: 'xhigh',
+      })
+    }
+
     client.close()
     await once(client, 'close')
     await server.stop()
@@ -1830,6 +1854,72 @@ describe('SwarmWebSocketServer', () => {
     )
 
     expect(invalidModelError.type).toBe('error')
+
+    client.send(
+      JSON.stringify({
+        type: 'update_manager',
+        managerId: 'manager',
+        model: 'pi-opus',
+        provider: 'anthropic',
+        modelId: 'claude-opus-4-6',
+      }),
+    )
+
+    const mixedPayloadError = await waitForEvent(
+      events,
+      (event) =>
+        event.type === 'error' &&
+        event.code === 'INVALID_COMMAND' &&
+        event.message.includes(
+          'update_manager.model cannot be combined with update_manager.provider or update_manager.modelId',
+        ),
+    )
+
+    expect(mixedPayloadError.type).toBe('error')
+
+    client.send(
+      JSON.stringify({
+        type: 'update_manager',
+        managerId: 'manager',
+        provider: 'anthropic',
+      }),
+    )
+
+    const missingModelIdError = await waitForEvent(
+      events,
+      (event) =>
+        event.type === 'error' &&
+        event.code === 'INVALID_COMMAND' &&
+        event.message.includes(
+          'update_manager.provider and update_manager.modelId are required together for explicit model updates',
+        ),
+    )
+
+    expect(missingModelIdError.type).toBe('error')
+
+    client.send(
+      JSON.stringify({
+        type: 'update_manager',
+        managerId: 'manager',
+        provider: 'codex-app',
+        modelId: 'default',
+      }),
+    )
+
+    const unsupportedDescriptorError = await waitForEvent(
+      events,
+      (event) =>
+        event.type === 'error' &&
+        event.code === 'UPDATE_MANAGER_FAILED' &&
+        event.message.includes('Unsupported model descriptor codex-app/default'),
+    )
+
+    expect(unsupportedDescriptorError.type).toBe('error')
+    expect(manager.getAgent('manager')?.model).toEqual({
+      provider: 'openai-codex',
+      modelId: 'gpt-5.3-codex',
+      thinkingLevel: 'xhigh',
+    })
 
     client.close()
     await once(client, 'close')

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { ServerEvent } from "@nexus/protocol";
+import { getModel } from "@mariozechner/pi-ai";
 import {
   loadArchetypePromptRegistry,
   normalizeArchetypeId,
@@ -41,7 +42,6 @@ import {
 import {
   DEFAULT_SWARM_MODEL_PRESET,
   inferSwarmModelPresetFromDescriptor,
-  normalizeSwarmModelDescriptor,
   parseSwarmModelPreset,
   resolveModelDescriptorFromPreset
 } from "./model-presets.js";
@@ -82,6 +82,7 @@ import type {
   SkillEnvRequirement,
   SpawnAgentInput,
   SwarmConfig,
+  SwarmModelPresetDefinitions,
   SwarmModelPreset,
   ThinkingLevel
 } from "./types.js";
@@ -668,6 +669,8 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
     input: {
       managerId: string;
       model?: SwarmModelPreset;
+      provider?: string;
+      modelId?: string;
       thinkingLevel?: ThinkingLevel;
       promptOverride?: string;
     }
@@ -677,8 +680,28 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
 
     const currentPromptOverride = normalizePromptOverride(target.promptOverride);
     const requestedModelPreset = parseSwarmModelPreset(input.model, "update_manager.model");
+    const requestedProvider = parseOptionalNonEmptyString(input.provider, "update_manager.provider");
+    const requestedModelId = parseOptionalNonEmptyString(input.modelId, "update_manager.modelId");
     const requestedThinkingLevel = parseThinkingLevel(input.thinkingLevel, "update_manager.thinkingLevel");
     const hasPromptOverridePatch = input.promptOverride !== undefined;
+    const hasExplicitDescriptorField = input.provider !== undefined || input.modelId !== undefined;
+    const hasExplicitModelUpdate = requestedProvider !== undefined || requestedModelId !== undefined;
+
+    if (requestedModelPreset && hasExplicitDescriptorField) {
+      throw new Error(
+        "update_manager.model cannot be combined with update_manager.provider or update_manager.modelId"
+      );
+    }
+    if (hasExplicitDescriptorField && !hasExplicitModelUpdate) {
+      throw new Error(
+        "update_manager.provider and update_manager.modelId are required together for explicit model updates"
+      );
+    }
+    if (hasExplicitModelUpdate && (!requestedProvider || !requestedModelId)) {
+      throw new Error(
+        "update_manager.provider and update_manager.modelId are required together for explicit model updates"
+      );
+    }
 
     let nextModel: AgentModelDescriptor = target.model;
     if (requestedModelPreset) {
@@ -686,7 +709,16 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
         presetDefinitions: this.modelPresetDefinitions
       });
     }
-    if (requestedThinkingLevel) {
+    if (hasExplicitModelUpdate) {
+      nextModel = normalizeManagedModelDescriptor(
+        {
+          provider: requestedProvider!,
+          modelId: requestedModelId!,
+          thinkingLevel: requestedThinkingLevel ?? nextModel.thinkingLevel
+        },
+        { presetDefinitions: this.modelPresetDefinitions }
+      );
+    } else if (requestedThinkingLevel) {
       nextModel = {
         ...nextModel,
         thinkingLevel: requestedThinkingLevel
@@ -1639,9 +1671,9 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
   }
 
   private normalizePersistedModelDescriptor(
-    descriptor: Pick<AgentModelDescriptor, "provider" | "modelId"> | undefined
+    descriptor: (Pick<AgentModelDescriptor, "provider" | "modelId"> & { thinkingLevel?: string }) | undefined
   ): AgentModelDescriptor {
-    return normalizeSwarmModelDescriptor(descriptor, {
+    return normalizeManagedModelDescriptor(descriptor, {
       presetDefinitions: this.modelPresetDefinitions
     });
   }
@@ -2303,6 +2335,73 @@ function parseThinkingLevel(value: unknown, fieldName: string): ThinkingLevel | 
   }
 
   return value as ThinkingLevel;
+}
+
+function parseOptionalNonEmptyString(value: unknown, fieldName: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${fieldName} must be a non-empty string when provided`);
+  }
+
+  return value.trim();
+}
+
+function normalizeManagedModelDescriptor(
+  descriptor: (Pick<AgentModelDescriptor, "provider" | "modelId"> & { thinkingLevel?: string }) | undefined,
+  options: { presetDefinitions: SwarmModelPresetDefinitions }
+): AgentModelDescriptor {
+  const provider = typeof descriptor?.provider === "string" ? descriptor.provider.trim() : "";
+  const modelId = typeof descriptor?.modelId === "string" ? descriptor.modelId.trim() : "";
+  const normalizedProvider = provider || "<missing>";
+  const normalizedModelId = modelId || "<missing>";
+  if (!provider || !modelId) {
+    throw new Error(`Unsupported model descriptor ${normalizedProvider}/${normalizedModelId}`);
+  }
+
+  const inferredPreset = inferSwarmModelPresetFromDescriptor(
+    {
+      provider,
+      modelId
+    },
+    { presetDefinitions: options.presetDefinitions }
+  );
+
+  const defaultThinkingLevel = inferredPreset
+    ? resolveModelDescriptorFromPreset(inferredPreset, { presetDefinitions: options.presetDefinitions }).thinkingLevel
+    : ("xhigh" as ThinkingLevel);
+  const resolvedThinkingLevel =
+    parseThinkingLevel(descriptor?.thinkingLevel, "model.thinkingLevel") ?? defaultThinkingLevel;
+
+  if (inferredPreset) {
+    const canonical = resolveModelDescriptorFromPreset(inferredPreset, {
+      presetDefinitions: options.presetDefinitions
+    });
+    return {
+      ...canonical,
+      thinkingLevel: resolvedThinkingLevel
+    };
+  }
+
+  if (!isSupportedExplicitModelDescriptor(provider, modelId)) {
+    throw new Error(`Unsupported model descriptor ${provider}/${modelId}`);
+  }
+
+  return {
+    provider,
+    modelId,
+    thinkingLevel: resolvedThinkingLevel
+  };
+}
+
+function isSupportedExplicitModelDescriptor(provider: string, modelId: string): boolean {
+  const normalizedProvider = provider.trim().toLowerCase();
+  if (normalizedProvider === "openai-codex-app-server" || normalizedProvider === "claude-agent-sdk") {
+    return true;
+  }
+
+  return Boolean(getModel(provider as any, modelId as any));
 }
 
 function normalizePromptOverride(value: string | undefined): string | undefined {

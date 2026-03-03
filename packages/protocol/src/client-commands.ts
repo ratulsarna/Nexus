@@ -18,6 +18,8 @@ export type ClientCommand =
       type: 'update_manager'
       managerId: string
       model?: ManagerModelPreset
+      provider?: string
+      modelId?: string
       thinkingLevel?: ThinkingLevel
       promptOverride?: string
       requestId?: string

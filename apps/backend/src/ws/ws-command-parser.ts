@@ -137,9 +137,12 @@ export function parseClientCommand(raw: RawData): ParsedClientCommand {
   if (maybe.type === "update_manager") {
     const managerId = (maybe as { managerId?: unknown }).managerId;
     const model = (maybe as { model?: unknown }).model;
+    const provider = (maybe as { provider?: unknown }).provider;
+    const modelId = (maybe as { modelId?: unknown }).modelId;
     const thinkingLevel = (maybe as { thinkingLevel?: unknown }).thinkingLevel;
     const promptOverride = (maybe as { promptOverride?: unknown }).promptOverride;
     const requestId = (maybe as { requestId?: unknown }).requestId;
+    const hasExplicitDescriptorField = provider !== undefined || modelId !== undefined;
 
     if (typeof managerId !== "string" || managerId.trim().length === 0) {
       return { ok: false, error: "update_manager.managerId must be a non-empty string" };
@@ -149,6 +152,24 @@ export function parseClientCommand(raw: RawData): ParsedClientCommand {
         ok: false,
         error: `update_manager.model must be one of ${describeSwarmModelPresets()}`
       };
+    }
+    if (model !== undefined && hasExplicitDescriptorField) {
+      return {
+        ok: false,
+        error: "update_manager.model cannot be combined with update_manager.provider or update_manager.modelId"
+      };
+    }
+    if (hasExplicitDescriptorField && (provider === undefined || modelId === undefined)) {
+      return {
+        ok: false,
+        error: "update_manager.provider and update_manager.modelId are required together for explicit model updates"
+      };
+    }
+    if (provider !== undefined && (typeof provider !== "string" || provider.trim().length === 0)) {
+      return { ok: false, error: "update_manager.provider must be a non-empty string when provided" };
+    }
+    if (modelId !== undefined && (typeof modelId !== "string" || modelId.trim().length === 0)) {
+      return { ok: false, error: "update_manager.modelId must be a non-empty string when provided" };
     }
     if (thinkingLevel !== undefined && !isThinkingLevel(thinkingLevel)) {
       return {
@@ -162,7 +183,7 @@ export function parseClientCommand(raw: RawData): ParsedClientCommand {
     if (requestId !== undefined && typeof requestId !== "string") {
       return { ok: false, error: "update_manager.requestId must be a string when provided" };
     }
-    if (model === undefined && thinkingLevel === undefined && promptOverride === undefined) {
+    if (!hasExplicitDescriptorField && model === undefined && thinkingLevel === undefined && promptOverride === undefined) {
       return {
         ok: false,
         error: "update_manager must include at least one of model|thinkingLevel|promptOverride"
@@ -177,6 +198,8 @@ export function parseClientCommand(raw: RawData): ParsedClientCommand {
         type: "update_manager",
         managerId: managerId.trim(),
         model,
+        provider: typeof provider === "string" ? provider.trim() : undefined,
+        modelId: typeof modelId === "string" ? modelId.trim() : undefined,
         thinkingLevel: normalizedThinkingLevel,
         promptOverride,
         requestId

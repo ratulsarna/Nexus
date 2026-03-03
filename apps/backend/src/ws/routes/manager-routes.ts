@@ -111,6 +111,8 @@ export async function handleManagerCommand(context: ManagerCommandRouteContext):
       const updated = await swarmManager.updateManager(managerContextId, {
         managerId: command.managerId,
         model: command.model,
+        provider: command.provider,
+        modelId: command.modelId,
         thinkingLevel: command.thinkingLevel,
         promptOverride: command.promptOverride
       });

@@ -2199,6 +2199,109 @@ describe('SwarmManager', () => {
     expect(manager.createdRuntimeIds.filter((id) => id === 'manager')).toHaveLength(2)
   })
 
+  it('applies explicit non-preset provider/modelId update_manager payload and preserves it across restart', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const initialRuntime = manager.runtimeByAgentId.get('manager')
+    expect(initialRuntime).toBeDefined()
+
+    const updated = await manager.updateManager('manager', {
+      managerId: 'manager',
+      provider: 'anthropic',
+      modelId: 'claude-sonnet-4-5',
+    })
+
+    expect(updated.resetApplied).toBe(true)
+    expect(updated.manager.model).toEqual({
+      provider: 'anthropic',
+      modelId: 'claude-sonnet-4-5',
+      thinkingLevel: 'xhigh',
+    })
+    expect(initialRuntime?.terminateCalls).toEqual([{ abort: true }])
+    expect(manager.createdRuntimeIds.filter((id) => id === 'manager')).toHaveLength(2)
+
+    const rebooted = new TestSwarmManager(config)
+    await rebooted.boot()
+
+    const restoredManager = rebooted.getAgent('manager')
+    expect(restoredManager?.model).toEqual({
+      provider: 'anthropic',
+      modelId: 'claude-sonnet-4-5',
+      thinkingLevel: 'xhigh',
+    })
+
+    await expect(rebooted.handleUserMessage('hello after explicit update')).resolves.toBeUndefined()
+  })
+
+  it('does not reset manager runtime when explicit update_manager payload has no effective change', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    await manager.updateManager('manager', {
+      managerId: 'manager',
+      provider: 'anthropic',
+      modelId: 'claude-sonnet-4-5',
+    })
+
+    const runtimeAfterChange = manager.runtimeByAgentId.get('manager')
+    expect(runtimeAfterChange).toBeDefined()
+    const createdBeforeNoOp = manager.createdRuntimeIds.filter((id) => id === 'manager').length
+
+    const noOp = await manager.updateManager('manager', {
+      managerId: 'manager',
+      provider: 'anthropic',
+      modelId: 'claude-sonnet-4-5',
+    })
+
+    expect(noOp.resetApplied).toBe(false)
+    expect(manager.createdRuntimeIds.filter((id) => id === 'manager')).toHaveLength(createdBeforeNoOp)
+    expect(runtimeAfterChange?.terminateCalls).toEqual([])
+  })
+
+  it('rejects unsupported explicit descriptors before manager reset and persistence mutation', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const before = manager.getAgent('manager')
+    const initialRuntime = manager.runtimeByAgentId.get('manager')
+    const createdBefore = manager.createdRuntimeIds.filter((id) => id === 'manager').length
+
+    await expect(
+      manager.updateManager('manager', {
+        managerId: 'manager',
+        provider: 'codex-app',
+        modelId: 'default',
+      }),
+    ).rejects.toThrow('Unsupported model descriptor codex-app/default')
+
+    const after = manager.getAgent('manager')
+    expect(after?.model).toEqual(before?.model)
+    expect(after?.updatedAt).toBe(before?.updatedAt)
+    expect(initialRuntime?.terminateCalls).toEqual([])
+    expect(manager.createdRuntimeIds.filter((id) => id === 'manager')).toHaveLength(createdBefore)
+  })
+
+  it('rejects update_manager payloads that mix preset and explicit model descriptor fields', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    await expect(
+      manager.updateManager('manager', {
+        managerId: 'manager',
+        model: 'pi-codex',
+        provider: 'anthropic',
+        modelId: 'claude-opus-4-6',
+      }),
+    ).rejects.toThrow(
+      'update_manager.model cannot be combined with update_manager.provider or update_manager.modelId',
+    )
+  })
+
   it('sets and clears manager prompt override through update_manager', async () => {
     const config = await makeTempConfig()
     const manager = new TestSwarmManager(config)
