@@ -625,6 +625,7 @@ describe('CodexAgentRuntime behavior', () => {
   })
 
   it('clamps unsupported requested effort to nearest supported lower effort', async () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
     const tempDir = await mkdtemp(join(tmpdir(), 'swarm-codex-runtime-'))
     const descriptor = makeDescriptor(tempDir, {
       modelId: 'gpt-floor',
@@ -674,17 +675,44 @@ describe('CodexAgentRuntime behavior', () => {
       throw new Error(`Unexpected method: ${method}`)
     })
 
-    const runtime = await CodexAgentRuntime.create({
-      descriptor,
-      callbacks: {
-        onStatusChange: async () => {},
-      },
-      systemPrompt: 'You are a test codex runtime.',
-      tools: [],
-    })
+    try {
+      const runtime = await CodexAgentRuntime.create({
+        descriptor,
+        callbacks: {
+          onStatusChange: async () => {},
+        },
+        systemPrompt: 'You are a test codex runtime.',
+        tools: [],
+      })
 
-    await runtime.sendMessage('trigger floor clamp')
-    await runtime.terminate({ abort: false })
+      await runtime.sendMessage('trigger floor clamp')
+      const turnStartConfigPayload = infoSpy.mock.calls.find(
+        (call) =>
+          typeof call[1] === 'object' &&
+          call[1] &&
+          (call[1] as { event?: string }).event === 'turn_start_config',
+      )?.[1] as
+        | {
+            runtime?: string
+            event?: string
+            model?: string
+            requestedEffort?: string
+            effectiveEffort?: string
+            effortClamped?: boolean
+          }
+        | undefined
+
+      expect(turnStartConfigPayload?.runtime).toBe('codex-app-server')
+      expect(turnStartConfigPayload?.event).toBe('turn_start_config')
+      expect(turnStartConfigPayload?.model).toBe('gpt-floor')
+      expect(turnStartConfigPayload?.requestedEffort).toBe('xhigh')
+      expect(turnStartConfigPayload?.effectiveEffort).toBe('medium')
+      expect(turnStartConfigPayload?.effortClamped).toBe(true)
+
+      await runtime.terminate({ abort: false })
+    } finally {
+      infoSpy.mockRestore()
+    }
   })
 
   it('uses the minimum supported effort when requested effort is below all supported efforts', async () => {
@@ -748,6 +776,7 @@ describe('CodexAgentRuntime behavior', () => {
   })
 
   it('falls back to mapped effort when model/list is unavailable', async () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
     const tempDir = await mkdtemp(join(tmpdir(), 'swarm-codex-runtime-'))
     const descriptor = makeDescriptor(tempDir, {
       modelId: 'gpt-fallback',
@@ -783,17 +812,44 @@ describe('CodexAgentRuntime behavior', () => {
       throw new Error(`Unexpected method: ${method}`)
     })
 
-    const runtime = await CodexAgentRuntime.create({
-      descriptor,
-      callbacks: {
-        onStatusChange: async () => {},
-      },
-      systemPrompt: 'You are a test codex runtime.',
-      tools: [],
-    })
+    try {
+      const runtime = await CodexAgentRuntime.create({
+        descriptor,
+        callbacks: {
+          onStatusChange: async () => {},
+        },
+        systemPrompt: 'You are a test codex runtime.',
+        tools: [],
+      })
 
-    await runtime.sendMessage('trigger fallback')
-    await runtime.terminate({ abort: false })
+      await runtime.sendMessage('trigger fallback')
+      const turnStartConfigPayload = infoSpy.mock.calls.find(
+        (call) =>
+          typeof call[1] === 'object' &&
+          call[1] &&
+          (call[1] as { event?: string }).event === 'turn_start_config',
+      )?.[1] as
+        | {
+            runtime?: string
+            event?: string
+            model?: string
+            requestedEffort?: string
+            effectiveEffort?: string
+            effortClamped?: boolean
+          }
+        | undefined
+
+      expect(turnStartConfigPayload?.runtime).toBe('codex-app-server')
+      expect(turnStartConfigPayload?.event).toBe('turn_start_config')
+      expect(turnStartConfigPayload?.model).toBe('gpt-fallback')
+      expect(turnStartConfigPayload?.requestedEffort).toBe('high')
+      expect(turnStartConfigPayload?.effectiveEffort).toBe('high')
+      expect(turnStartConfigPayload?.effortClamped).toBe(false)
+
+      await runtime.terminate({ abort: false })
+    } finally {
+      infoSpy.mockRestore()
+    }
   })
 
   it('retries model/list after transient failure and clamps recovered effort on next turn', async () => {

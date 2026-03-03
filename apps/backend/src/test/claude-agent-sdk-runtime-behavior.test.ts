@@ -328,6 +328,7 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
   });
 
   it("maps canonical thinking level to deterministic Claude thinking/effort with safe static clamp", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
     sdkMockState.streams.push([
       {
         type: "result",
@@ -348,25 +349,62 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
       expires: String(Date.now() + 60_000)
     } as unknown as AuthCredential);
 
-    const runtime = await ClaudeAgentSdkRuntime.create({
-      descriptor: createDescriptor(rootDir),
-      callbacks: {
-        onStatusChange: async () => {}
-      },
-      systemPrompt: "You are a worker",
-      tools: [],
-      authFile
-    });
+    try {
+      const runtime = await ClaudeAgentSdkRuntime.create({
+        descriptor: createDescriptor(rootDir),
+        callbacks: {
+          onStatusChange: async () => {}
+        },
+        systemPrompt: "You are a worker",
+        tools: [],
+        authFile
+      });
 
-    await runtime.sendMessage("apply canonical mapping");
-    await waitFor(() => runtime.getPendingCount() === 0 && runtime.getStatus() === "idle");
+      await runtime.sendMessage("apply canonical mapping");
+      await waitFor(() => runtime.getPendingCount() === 0 && runtime.getStatus() === "idle");
 
-    expect(sdkMockState.supportedModelsCallCount).toBe(0);
-    expect(sdkMockState.queryCalls).toHaveLength(1);
-    expect(sdkMockState.queryCalls[0]?.options?.thinking).toEqual({ type: "enabled" });
-    expect(sdkMockState.queryCalls[0]?.options?.effort).toBe("high");
+      expect(sdkMockState.supportedModelsCallCount).toBe(0);
+      expect(sdkMockState.queryCalls).toHaveLength(1);
+      expect(sdkMockState.queryCalls[0]?.options?.thinking).toEqual({ type: "enabled" });
+      expect(sdkMockState.queryCalls[0]?.options?.effort).toBe("high");
 
-    await runtime.terminate({ abort: true });
+      const queryAttemptPayload = infoSpy.mock.calls.find(
+        (call) =>
+          typeof call[1] === "object" &&
+          call[1] &&
+          (call[1] as { event?: string }).event === "query_attempt"
+      )?.[1] as
+        | {
+            runtime?: string;
+            event?: string;
+            model?: string;
+            settingSources?: string[];
+            thinkingOption?: unknown;
+            effortOption?: string;
+            requestedThinking?: string;
+            effectiveThinking?: string;
+            requestedEffort?: string;
+            effectiveEffort?: string;
+            effortClamped?: boolean;
+          }
+        | undefined;
+
+      expect(queryAttemptPayload?.runtime).toBe("claude-agent-sdk");
+      expect(queryAttemptPayload?.event).toBe("query_attempt");
+      expect(queryAttemptPayload?.model).toBe("claude-opus-4-6");
+      expect(queryAttemptPayload?.settingSources).toEqual(["project"]);
+      expect(queryAttemptPayload?.thinkingOption).toEqual({ type: "enabled" });
+      expect(queryAttemptPayload?.effortOption).toBe("high");
+      expect(queryAttemptPayload?.requestedThinking).toBe("enabled");
+      expect(queryAttemptPayload?.effectiveThinking).toBe("enabled");
+      expect(queryAttemptPayload?.requestedEffort).toBe("max");
+      expect(queryAttemptPayload?.effectiveEffort).toBe("high");
+      expect(queryAttemptPayload?.effortClamped).toBe(true);
+
+      await runtime.terminate({ abort: true });
+    } finally {
+      infoSpy.mockRestore();
+    }
   });
 
   it("keeps mapped low effort for minimal thinking level under static clamp bounds", async () => {
@@ -1130,6 +1168,7 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
 
   it("retries once with fallback settings and emits a structured warning for settings read failures", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
 
     try {
       sdkMockState.streams.push(
@@ -1210,9 +1249,27 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
       expect(warningPayload?.fallbackSources).toEqual([]);
       expect(warningPayload?.reason).toContain(".claude/settings.json");
 
+      const queryAttemptPayloads = infoSpy.mock.calls
+        .filter(
+          (call) =>
+            typeof call[1] === "object" &&
+            call[1] &&
+            (call[1] as { event?: string }).event === "query_attempt"
+        )
+        .map((call) => call[1] as { settingSources?: string[]; requestedEffort?: string; effectiveEffort?: string });
+
+      expect(queryAttemptPayloads).toHaveLength(2);
+      expect(queryAttemptPayloads[0]?.settingSources).toEqual(["project"]);
+      expect(queryAttemptPayloads[1]?.settingSources).toEqual([]);
+      expect(queryAttemptPayloads[0]?.requestedEffort).toBe("max");
+      expect(queryAttemptPayloads[0]?.effectiveEffort).toBe("high");
+      expect(queryAttemptPayloads[1]?.requestedEffort).toBe("max");
+      expect(queryAttemptPayloads[1]?.effectiveEffort).toBe("high");
+
       await runtime.terminate({ abort: true });
     } finally {
       warnSpy.mockRestore();
+      infoSpy.mockRestore();
     }
   });
 
