@@ -1,94 +1,161 @@
 import { useId, useState } from 'react'
 import {
   AlertCircle,
+  Boxes,
   Check,
   ChevronRight,
   FileText,
+  Globe,
+  Image,
   Loader2,
+  ListTodo,
   MessageSquare,
   Terminal,
   Users,
+  Wrench,
   X,
   type LucideIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { formatTimestamp } from './message-row-utils'
+import type { ToolCallCategory } from '@/lib/tool-call-classifier'
 import type {
   ConversationLogEntry,
   ToolDisplayStatus,
   ToolExecutionDisplayEntry,
 } from './types'
 
-type ToolConfig = {
-  label: string
-  activeLabel: string
-  cancelledLabel: string
-  errorLabel: string
+type ToolDetailConfig = {
+  detailKeys?: string[]
   icon?: LucideIcon
   getDetail?: (input: Record<string, unknown>) => string | null
 }
 
-const TOOL_CONFIG: Record<string, ToolConfig> = {
-  bash: {
-    label: 'Ran command',
-    activeLabel: 'Running command',
-    cancelledLabel: 'Command cancelled',
-    errorLabel: 'Command failed',
+type CategoryMessageConfig = {
+  label: string
+  activeLabel: string
+  cancelledLabel: string
+  errorLabel: string
+  icon: LucideIcon
+}
+
+const CATEGORY_MESSAGE_CONFIG: Record<ToolCallCategory, CategoryMessageConfig> = {
+  shell: {
+    label: 'Ran shell command',
+    activeLabel: 'Running shell command',
+    cancelledLabel: 'Shell command cancelled',
+    errorLabel: 'Shell command failed',
     icon: Terminal,
+  },
+  file: {
+    label: 'Ran file operation',
+    activeLabel: 'Running file operation',
+    cancelledLabel: 'File operation cancelled',
+    errorLabel: 'File operation failed',
+    icon: FileText,
+  },
+  agent: {
+    label: 'Ran agent task',
+    activeLabel: 'Running agent task',
+    cancelledLabel: 'Agent task cancelled',
+    errorLabel: 'Agent task failed',
+    icon: Users,
+  },
+  mcp: {
+    label: 'Ran MCP tool',
+    activeLabel: 'Running MCP tool',
+    cancelledLabel: 'MCP tool cancelled',
+    errorLabel: 'MCP tool failed',
+    icon: Boxes,
+  },
+  web: {
+    label: 'Ran web tool',
+    activeLabel: 'Running web tool',
+    cancelledLabel: 'Web tool cancelled',
+    errorLabel: 'Web tool failed',
+    icon: Globe,
+  },
+  image: {
+    label: 'Ran image tool',
+    activeLabel: 'Running image tool',
+    cancelledLabel: 'Image tool cancelled',
+    errorLabel: 'Image tool failed',
+    icon: Image,
+  },
+  plan: {
+    label: 'Updated plan',
+    activeLabel: 'Updating plan',
+    cancelledLabel: 'Plan update cancelled',
+    errorLabel: 'Plan update failed',
+    icon: ListTodo,
+  },
+  input: {
+    label: 'Requested user input',
+    activeLabel: 'Requesting user input',
+    cancelledLabel: 'User input request cancelled',
+    errorLabel: 'User input request failed',
+    icon: MessageSquare,
+  },
+  unknown: {
+    label: 'Ran tool',
+    activeLabel: 'Running tool',
+    cancelledLabel: 'Tool cancelled',
+    errorLabel: 'Tool failed',
+    icon: Wrench,
+  },
+}
+
+const TOOL_DETAIL_CONFIG: Record<string, ToolDetailConfig> = {
+  bash: {
+    detailKeys: ['description', 'command', 'cmd'],
     getDetail: (input) => {
       const command = pickString(input, ['description', 'command'])
       return command ? truncate(command, 72) : null
     },
   },
+  exec_command: {
+    detailKeys: ['description', 'command', 'cmd'],
+  },
+  command_execution: {
+    detailKeys: ['description', 'command', 'cmd'],
+  },
   read: {
-    label: 'Read file',
-    activeLabel: 'Reading file',
-    cancelledLabel: 'Read cancelled',
-    errorLabel: 'Read failed',
-    icon: FileText,
-    getDetail: (input) => {
-      const path = pickString(input, ['path'])
-      return path ? truncate(path, 72) : null
-    },
+    detailKeys: ['path'],
   },
   write: {
-    label: 'Wrote file',
-    activeLabel: 'Writing file',
-    cancelledLabel: 'Write cancelled',
-    errorLabel: 'Write failed',
-    icon: FileText,
-    getDetail: (input) => {
-      const path = pickString(input, ['path'])
-      return path ? truncate(path, 72) : null
-    },
+    detailKeys: ['path'],
   },
   edit: {
-    label: 'Edited file',
-    activeLabel: 'Editing file',
-    cancelledLabel: 'Edit cancelled',
-    errorLabel: 'Edit failed',
-    icon: FileText,
-    getDetail: (input) => {
-      const path = pickString(input, ['path'])
-      return path ? truncate(path, 72) : null
-    },
+    detailKeys: ['path'],
+  },
+  file_change: {
+    detailKeys: ['path'],
   },
   list_agents: {
-    label: 'Checked agents',
-    activeLabel: 'Checking agents',
-    cancelledLabel: 'Agent check cancelled',
-    errorLabel: 'Agent check failed',
-    icon: Users,
+    detailKeys: ['targetAgentId', 'agentId'],
   },
   send_message_to_agent: {
-    label: 'Sent agent message',
-    activeLabel: 'Sending agent message',
-    cancelledLabel: 'Message cancelled',
-    errorLabel: 'Message failed',
-    icon: MessageSquare,
+    detailKeys: ['targetAgentId', 'agentId'],
     getDetail: (input) => pickString(input, ['targetAgentId']) ?? null,
   },
+  mcp__linear__list_issues: {
+    detailKeys: ['query', 'project', 'team'],
+  },
+  mcp: {
+    detailKeys: ['server', 'toolName'],
+  },
+}
+
+const CATEGORY_DETAIL_KEYS: Partial<Record<ToolCallCategory, string[]>> = {
+  shell: ['description', 'command', 'cmd'],
+  file: ['path', 'targetPath', 'file'],
+  agent: ['targetAgentId', 'agentId'],
+  mcp: ['toolName', 'server', 'query'],
+  web: ['query', 'url'],
+  image: ['query', 'path', 'url'],
+  plan: ['title', 'step'],
+  input: ['prompt', 'question'],
 }
 
 function truncate(str: string, maxLen: number): string {
@@ -160,30 +227,12 @@ function mapToolStatus(entry: ToolExecutionDisplayEntry): ToolDisplayStatus {
 }
 
 function getFriendlyToolMessage(
+  category: ToolCallCategory,
   toolName: string | undefined,
   input: Record<string, unknown>,
   status: ToolDisplayStatus,
 ): string {
-  const normalizedToolName = (toolName ?? '').trim()
-  const config = normalizedToolName ? TOOL_CONFIG[normalizedToolName] : undefined
-
-  if (!config) {
-    const friendlyName = humanizeToolName(normalizedToolName) || 'tool'
-
-    if (status === 'completed') {
-      return `Ran ${friendlyName}`
-    }
-
-    if (status === 'cancelled') {
-      return `Cancelled ${friendlyName}`
-    }
-
-    if (status === 'error') {
-      return `${friendlyName} failed`
-    }
-
-    return `Running ${friendlyName}`
-  }
+  const config = CATEGORY_MESSAGE_CONFIG[category] ?? CATEGORY_MESSAGE_CONFIG.unknown
 
   const baseLabel =
     status === 'completed'
@@ -191,11 +240,37 @@ function getFriendlyToolMessage(
       : status === 'cancelled'
         ? config.cancelledLabel
         : status === 'error'
-          ? config.errorLabel
-          : config.activeLabel
+        ? config.errorLabel
+        : config.activeLabel
 
-  const detail = config.getDetail?.(input)
+  const detail = getToolDetail(category, toolName, input)
   return detail ? `${baseLabel}: ${detail}` : baseLabel
+}
+
+function getToolDetail(
+  category: ToolCallCategory,
+  toolName: string | undefined,
+  input: Record<string, unknown>,
+): string | null {
+  const normalizedToolName = (toolName ?? '').trim().toLowerCase()
+  const toolConfig = normalizedToolName ? TOOL_DETAIL_CONFIG[normalizedToolName] : undefined
+
+  const exactDetail = toolConfig?.getDetail?.(input)
+  if (exactDetail) {
+    return exactDetail
+  }
+
+  const keys = toolConfig?.detailKeys ?? CATEGORY_DETAIL_KEYS[category]
+  const genericDetail = keys ? pickString(input, keys) : null
+  if (genericDetail) {
+    return truncate(genericDetail, 72)
+  }
+
+  if (category === 'unknown' && normalizedToolName.length > 0) {
+    return truncate(humanizeToolName(normalizedToolName), 72)
+  }
+
+  return null
 }
 
 function ToolPayloadBlock({
@@ -233,16 +308,18 @@ function ToolExecutionLogRow({ entry }: { entry: ToolExecutionDisplayEntry }) {
   const contentId = useId()
 
   const displayStatus = mapToolStatus(entry)
+  const categoryConfig =
+    CATEGORY_MESSAGE_CONFIG[entry.classification.category] ?? CATEGORY_MESSAGE_CONFIG.unknown
   const inputRecord = parseJsonRecord(entry.inputPayload ?? entry.latestPayload)
   const friendlyMessage = getFriendlyToolMessage(
+    entry.classification.category,
     entry.toolName,
     inputRecord,
     displayStatus,
   )
   const actorLabel = entry.actorAgentId?.trim()
 
-  const config = entry.toolName ? TOOL_CONFIG[entry.toolName] : undefined
-  const ToolIcon = config?.icon
+  const ToolIcon = categoryConfig.icon
 
   const outputPayload =
     entry.outputPayload ??
