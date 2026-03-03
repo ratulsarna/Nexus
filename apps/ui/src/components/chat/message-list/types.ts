@@ -1,4 +1,5 @@
 import type { ConversationEntry } from '@nexus/protocol'
+import type { ToolCallClassification } from '@/lib/tool-call-classifier'
 
 export type ConversationMessageEntry = Extract<
   ConversationEntry,
@@ -31,6 +32,8 @@ export interface ToolExecutionDisplayEntry {
   actorAgentId?: string
   toolName?: string
   toolCallId?: string
+  callable: boolean
+  classification: ToolCallClassification
   inputPayload?: string
   latestPayload?: string
   outputPayload?: string

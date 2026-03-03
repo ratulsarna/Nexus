@@ -5,15 +5,10 @@ import type { ArtifactReference } from '@/lib/artifacts'
 import { cn } from '@/lib/utils'
 import type { ConversationEntry } from '@nexus/protocol'
 import { AgentMessageRow } from './message-list/AgentMessageRow'
+import { buildDisplayEntries } from './message-list/build-display-entries'
 import { ConversationMessageRow } from './message-list/ConversationMessageRow'
 import { EmptyState } from './message-list/EmptyState'
 import { ToolLogRow } from './message-list/ToolLogRow'
-import type {
-  ConversationLogEntry,
-  ToolExecutionDisplayEntry,
-  ToolExecutionEvent,
-  ToolExecutionLogEntry,
-} from './message-list/types'
 
 interface MessageListProps {
   messages: ConversationEntry[]
@@ -25,165 +20,10 @@ interface MessageListProps {
 
 const AUTO_SCROLL_THRESHOLD_PX = 100
 
-type DisplayEntry =
-  | {
-      type: 'conversation_message'
-      id: string
-      message: Extract<ConversationEntry, { type: 'conversation_message' }>
-    }
-  | {
-      type: 'agent_message'
-      id: string
-      message: Extract<ConversationEntry, { type: 'agent_message' }>
-    }
-  | {
-      type: 'tool_execution'
-      id: string
-      entry: ToolExecutionDisplayEntry
-    }
-  | {
-      type: 'runtime_error_log'
-      id: string
-      entry: ConversationLogEntry
-    }
-
 function isNearBottom(container: HTMLElement, threshold = AUTO_SCROLL_THRESHOLD_PX): boolean {
   const distanceFromBottom =
     container.scrollHeight - container.scrollTop - container.clientHeight
   return distanceFromBottom <= threshold
-}
-
-function isToolExecutionLog(entry: ConversationLogEntry): entry is ToolExecutionLogEntry {
-  return (
-    entry.kind === 'tool_execution_start' ||
-    entry.kind === 'tool_execution_update' ||
-    entry.kind === 'tool_execution_end'
-  )
-}
-
-function isToolExecutionEvent(entry: ConversationEntry): entry is ToolExecutionEvent {
-  if (entry.type === 'agent_tool_call') {
-    return true
-  }
-
-  return entry.type === 'conversation_log' && isToolExecutionLog(entry)
-}
-
-function resolveToolExecutionEventActorAgentId(event: ToolExecutionEvent): string {
-  return event.type === 'agent_tool_call' ? event.actorAgentId : event.agentId
-}
-
-function hydrateToolDisplayEntry(
-  displayEntry: ToolExecutionDisplayEntry,
-  event: ToolExecutionEvent,
-): void {
-  displayEntry.actorAgentId = resolveToolExecutionEventActorAgentId(event)
-  displayEntry.toolName = event.toolName ?? displayEntry.toolName
-  displayEntry.toolCallId = event.toolCallId ?? displayEntry.toolCallId
-  displayEntry.timestamp = event.timestamp
-  displayEntry.latestKind = event.kind
-
-  if (event.kind === 'tool_execution_start') {
-    displayEntry.inputPayload = event.text
-    displayEntry.latestPayload = event.text
-    displayEntry.outputPayload = undefined
-    displayEntry.isError = false
-    return
-  }
-
-  if (event.kind === 'tool_execution_update') {
-    displayEntry.latestPayload = event.text
-    return
-  }
-
-  displayEntry.outputPayload = event.text
-  displayEntry.latestPayload = event.text
-  displayEntry.isError = event.isError
-}
-
-function buildDisplayEntries(messages: ConversationEntry[]): DisplayEntry[] {
-  const displayEntries: DisplayEntry[] = []
-  const toolEntriesByCallId = new Map<string, ToolExecutionDisplayEntry>()
-
-  for (const [index, message] of messages.entries()) {
-    if (message.type === 'conversation_message') {
-      displayEntries.push({
-        type: 'conversation_message',
-        id: `message-${message.timestamp}-${index}`,
-        message,
-      })
-      continue
-    }
-
-    if (message.type === 'agent_message') {
-      displayEntries.push({
-        type: 'agent_message',
-        id: `agent-message-${message.timestamp}-${index}`,
-        message,
-      })
-      continue
-    }
-
-    if (isToolExecutionEvent(message)) {
-      const actorAgentId = resolveToolExecutionEventActorAgentId(message)
-      const callId = message.toolCallId?.trim()
-
-      if (callId) {
-        const toolGroupKey = `${actorAgentId}:${callId}`
-        let displayEntry = toolEntriesByCallId.get(toolGroupKey)
-
-        if (!displayEntry) {
-          displayEntry = {
-            id: `tool-${toolGroupKey}`,
-            actorAgentId,
-            toolName: message.toolName,
-            toolCallId: callId,
-            timestamp: message.timestamp,
-            latestKind: message.kind,
-          }
-
-          displayEntries.push({
-            type: 'tool_execution',
-            id: displayEntry.id,
-            entry: displayEntry,
-          })
-
-          toolEntriesByCallId.set(toolGroupKey, displayEntry)
-        }
-
-        hydrateToolDisplayEntry(displayEntry, message)
-        continue
-      }
-
-      const displayEntry: ToolExecutionDisplayEntry = {
-        id: `tool-${message.timestamp}-${index}`,
-        actorAgentId,
-        toolName: message.toolName,
-        toolCallId: message.toolCallId,
-        timestamp: message.timestamp,
-        latestKind: message.kind,
-      }
-
-      hydrateToolDisplayEntry(displayEntry, message)
-
-      displayEntries.push({
-        type: 'tool_execution',
-        id: displayEntry.id,
-        entry: displayEntry,
-      })
-      continue
-    }
-
-    if (message.type === 'conversation_log' && message.isError) {
-      displayEntries.push({
-        type: 'runtime_error_log',
-        id: `runtime-log-${message.timestamp}-${index}`,
-        entry: message,
-      })
-    }
-  }
-
-  return displayEntries
 }
 
 function LoadingIndicator() {
