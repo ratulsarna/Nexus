@@ -2562,6 +2562,137 @@ describe('SwarmManager', () => {
     ).rejects.toThrow('spawn_agent.model must be one of pi-codex|pi-opus|codex-app|claude-agent-sdk')
   })
 
+  it('spawns a worker with explicit provider, modelId, and custom thinkingLevel', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const worker = await manager.spawnAgent('manager', {
+      agentId: 'Explicit Model Worker',
+      provider: 'anthropic',
+      modelId: 'claude-opus-4-6',
+      thinkingLevel: 'low',
+    })
+
+    expect(worker.model).toEqual({
+      provider: 'anthropic',
+      modelId: 'claude-opus-4-6',
+      thinkingLevel: 'low',
+    })
+  })
+
+  it('spawns a worker with explicit provider and modelId using default thinkingLevel', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const worker = await manager.spawnAgent('manager', {
+      agentId: 'Explicit No Thinking Worker',
+      provider: 'anthropic',
+      modelId: 'claude-opus-4-6',
+    })
+
+    expect(worker.model).toEqual({
+      provider: 'anthropic',
+      modelId: 'claude-opus-4-6',
+      thinkingLevel: 'xhigh',
+    })
+  })
+
+  it('rejects spawn_agent payloads that mix preset and explicit model descriptor fields', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    await expect(
+      manager.spawnAgent('manager', {
+        agentId: 'Invalid Mixed Worker',
+        model: 'pi-codex',
+        provider: 'anthropic',
+        modelId: 'claude-opus-4-6',
+      }),
+    ).rejects.toThrow(
+      'spawn_agent.model cannot be combined with spawn_agent.provider or spawn_agent.modelId',
+    )
+  })
+
+  it('rejects spawn_agent payloads that provide only provider or modelId in explicit mode', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    await expect(
+      manager.spawnAgent('manager', {
+        agentId: 'Missing Model Id',
+        provider: 'anthropic',
+      }),
+    ).rejects.toThrow(
+      'spawn_agent.provider and spawn_agent.modelId are required together for explicit model selection',
+    )
+
+    await expect(
+      manager.spawnAgent('manager', {
+        agentId: 'Missing Provider',
+        modelId: 'claude-opus-4-6',
+      }),
+    ).rejects.toThrow(
+      'spawn_agent.provider and spawn_agent.modelId are required together for explicit model selection',
+    )
+  })
+
+  it('rejects spawn_agent thinkingLevel when explicit provider/modelId are not provided', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    await expect(
+      manager.spawnAgent('manager', {
+        agentId: 'Thinking Without Explicit Descriptor',
+        thinkingLevel: 'low',
+      }),
+    ).rejects.toThrow(
+      'spawn_agent.thinkingLevel is only supported with spawn_agent.provider and spawn_agent.modelId',
+    )
+
+    await expect(
+      manager.spawnAgent('manager', {
+        agentId: 'Preset With Thinking',
+        model: 'pi-opus',
+        thinkingLevel: 'low',
+      }),
+    ).rejects.toThrow(
+      'spawn_agent.thinkingLevel is only supported with spawn_agent.provider and spawn_agent.modelId',
+    )
+  })
+
+  it('rejects spawn_agent with empty-string provider', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    await expect(
+      manager.spawnAgent('manager', {
+        agentId: 'Empty Provider Worker',
+        provider: '  ',
+        modelId: 'claude-opus-4-6',
+      }),
+    ).rejects.toThrow('spawn_agent.provider must be a non-empty string when provided')
+  })
+
+  it('rejects spawn_agent with empty-string modelId', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    await expect(
+      manager.spawnAgent('manager', {
+        agentId: 'Empty ModelId Worker',
+        provider: 'anthropic',
+        modelId: '  ',
+      }),
+    ).rejects.toThrow('spawn_agent.modelId must be a non-empty string when provided')
+  })
+
   it('allows deleting the default manager when requested', async () => {
     const config = await makeTempConfig()
     const manager = new TestSwarmManager(config)

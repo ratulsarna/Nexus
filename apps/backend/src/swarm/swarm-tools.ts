@@ -8,7 +8,8 @@ import {
   type MessageTargetContext,
   type RequestedDeliveryMode,
   type SendMessageReceipt,
-  type SpawnAgentInput
+  type SpawnAgentInput,
+  type ThinkingLevel
 } from "./types.js";
 
 export interface SwarmToolHost {
@@ -40,6 +41,15 @@ const spawnModelPresetSchema = Type.Union([
   Type.Literal("pi-opus"),
   Type.Literal("codex-app"),
   Type.Literal("claude-agent-sdk")
+]);
+
+const thinkingLevelSchema = Type.Union([
+  Type.Literal("off"),
+  Type.Literal("minimal"),
+  Type.Literal("low"),
+  Type.Literal("medium"),
+  Type.Literal("high"),
+  Type.Literal("xhigh")
 ]);
 
 const messageChannelSchema = Type.Union([
@@ -126,7 +136,7 @@ export function buildSwarmTools(host: SwarmToolHost, descriptor: AgentDescriptor
       name: "spawn_agent",
       label: "Spawn Agent",
       description:
-        "Create and start a new worker agent. agentId is required and normalized to lowercase kebab-case; if taken, a numeric suffix (-2, -3, …) is appended. archetypeId, systemPrompt, model, cwd, and initialMessage are optional. model accepts pi-codex|pi-opus|codex-app|claude-agent-sdk.",
+        "Create and start a new worker agent. agentId is required and normalized to lowercase kebab-case; if taken, a numeric suffix (-2, -3, …) is appended. archetypeId, systemPrompt, model, cwd, and initialMessage are optional. model accepts pi-codex|pi-opus|codex-app|claude-agent-sdk. Alternatively, use provider+modelId for explicit model selection (cannot be combined with model). thinkingLevel (off|minimal|low|medium|high|xhigh) requires provider+modelId.",
       parameters: Type.Object({
         agentId: Type.String({
           description:
@@ -137,6 +147,13 @@ export function buildSwarmTools(host: SwarmToolHost, descriptor: AgentDescriptor
         ),
         systemPrompt: Type.Optional(Type.String({ description: "Optional system prompt override." })),
         model: Type.Optional(spawnModelPresetSchema),
+        provider: Type.Optional(
+          Type.String({ description: "Explicit provider (e.g. 'anthropic', 'openai-codex-app-server'). Requires modelId." })
+        ),
+        modelId: Type.Optional(
+          Type.String({ description: "Explicit model id (e.g. 'claude-opus-4-6'). Requires provider." })
+        ),
+        thinkingLevel: Type.Optional(thinkingLevelSchema),
         cwd: Type.Optional(Type.String({ description: "Optional working directory override." })),
         initialMessage: Type.Optional(Type.String({ description: "Optional first message to send after spawn." }))
       }),
@@ -146,6 +163,9 @@ export function buildSwarmTools(host: SwarmToolHost, descriptor: AgentDescriptor
           archetypeId?: string;
           systemPrompt?: string;
           model?: unknown;
+          provider?: string;
+          modelId?: string;
+          thinkingLevel?: ThinkingLevel;
           cwd?: string;
           initialMessage?: string;
         };
@@ -155,6 +175,9 @@ export function buildSwarmTools(host: SwarmToolHost, descriptor: AgentDescriptor
           archetypeId: parsed.archetypeId,
           systemPrompt: parsed.systemPrompt,
           model: parseSwarmModelPreset(parsed.model, "spawn_agent.model"),
+          provider: parsed.provider,
+          modelId: parsed.modelId,
+          thinkingLevel: parsed.thinkingLevel,
           cwd: parsed.cwd,
           initialMessage: parsed.initialMessage
         });

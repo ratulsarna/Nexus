@@ -104,6 +104,9 @@ export interface SpawnAgentInput {
   archetypeId?: AgentArchetypeId;
   systemPrompt?: string;
   model?: SwarmModelPreset;
+  provider?: string;
+  modelId?: string;
+  thinkingLevel?: ThinkingLevel;
   cwd?: string;
   initialMessage?: string;
 }

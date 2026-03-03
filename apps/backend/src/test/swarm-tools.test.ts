@@ -119,6 +119,67 @@ describe('buildSwarmTools', () => {
     ).rejects.toThrow('spawn_agent.model must be one of pi-codex|pi-opus|codex-app|claude-agent-sdk')
   })
 
+  it('propagates spawn_agent explicit provider and modelId to host.spawnAgent', async () => {
+    let receivedInput: SpawnAgentInput | undefined
+
+    const host = makeHost(async (_callerAgentId, input) => {
+      receivedInput = input
+      return makeWorkerDescriptor('worker-explicit')
+    })
+
+    const tools = buildSwarmTools(host, makeManagerDescriptor())
+    const spawnTool = tools.find((tool) => tool.name === 'spawn_agent')
+    expect(spawnTool).toBeDefined()
+
+    await spawnTool!.execute(
+      'tool-call',
+      {
+        agentId: 'Worker Explicit',
+        provider: 'anthropic',
+        modelId: 'claude-opus-4-6',
+      },
+      undefined,
+      undefined,
+      undefined as any,
+    )
+
+    expect(receivedInput?.provider).toBe('anthropic')
+    expect(receivedInput?.modelId).toBe('claude-opus-4-6')
+    expect(receivedInput?.model).toBeUndefined()
+    expect(receivedInput?.thinkingLevel).toBeUndefined()
+  })
+
+  it('propagates spawn_agent provider, modelId, and thinkingLevel to host.spawnAgent', async () => {
+    let receivedInput: SpawnAgentInput | undefined
+
+    const host = makeHost(async (_callerAgentId, input) => {
+      receivedInput = input
+      return makeWorkerDescriptor('worker-thinking')
+    })
+
+    const tools = buildSwarmTools(host, makeManagerDescriptor())
+    const spawnTool = tools.find((tool) => tool.name === 'spawn_agent')
+    expect(spawnTool).toBeDefined()
+
+    await spawnTool!.execute(
+      'tool-call',
+      {
+        agentId: 'Worker Thinking',
+        provider: 'anthropic',
+        modelId: 'claude-opus-4-6',
+        thinkingLevel: 'low',
+      },
+      undefined,
+      undefined,
+      undefined as any,
+    )
+
+    expect(receivedInput?.provider).toBe('anthropic')
+    expect(receivedInput?.modelId).toBe('claude-opus-4-6')
+    expect(receivedInput?.thinkingLevel).toBe('low')
+    expect(receivedInput?.model).toBeUndefined()
+  })
+
   it('forwards speak_to_user target metadata and returns resolved target context', async () => {
     let receivedTarget: { channel: 'web' | 'slack' | 'telegram'; channelId?: string; userId?: string; threadTs?: string } | undefined
 

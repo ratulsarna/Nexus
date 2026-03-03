@@ -385,7 +385,7 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
     const agentId = this.generateUniqueAgentId(requestedAgentId);
     const createdAt = this.now();
 
-    const model = this.resolveSpawnModel(input.model, manager.model);
+    const model = this.resolveSpawnModel(input, manager.model);
     const archetypeId = this.resolveSpawnWorkerArchetypeId(input, agentId);
 
     const descriptor: AgentDescriptor = {
@@ -1805,14 +1805,51 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
   }
 
   private resolveSpawnModel(
-    requested: SpawnAgentInput["model"] | undefined,
+    input: Pick<SpawnAgentInput, "model" | "provider" | "modelId" | "thinkingLevel">,
     fallback: AgentModelDescriptor
   ): AgentModelDescriptor {
-    const requestedPreset = parseSwarmModelPreset(requested, "spawn_agent.model");
-    if (requestedPreset) {
-      return resolveModelDescriptorFromPreset(requestedPreset, {
+    const requestedModelPreset = parseSwarmModelPreset(input.model, "spawn_agent.model");
+    const requestedProvider = parseOptionalNonEmptyString(input.provider, "spawn_agent.provider");
+    const requestedModelId = parseOptionalNonEmptyString(input.modelId, "spawn_agent.modelId");
+    const requestedThinkingLevel = parseThinkingLevel(input.thinkingLevel, "spawn_agent.thinkingLevel");
+    const hasExplicitDescriptorField = input.provider !== undefined || input.modelId !== undefined;
+    const hasExplicitModel = requestedProvider !== undefined || requestedModelId !== undefined;
+
+    if (requestedModelPreset && hasExplicitDescriptorField) {
+      throw new Error(
+        "spawn_agent.model cannot be combined with spawn_agent.provider or spawn_agent.modelId"
+      );
+    }
+    if (hasExplicitDescriptorField && !hasExplicitModel) {
+      throw new Error(
+        "spawn_agent.provider and spawn_agent.modelId are required together for explicit model selection"
+      );
+    }
+    if (requestedThinkingLevel && !hasExplicitModel) {
+      throw new Error(
+        "spawn_agent.thinkingLevel is only supported with spawn_agent.provider and spawn_agent.modelId"
+      );
+    }
+    if (hasExplicitModel && (!requestedProvider || !requestedModelId)) {
+      throw new Error(
+        "spawn_agent.provider and spawn_agent.modelId are required together for explicit model selection"
+      );
+    }
+
+    if (requestedModelPreset) {
+      return resolveModelDescriptorFromPreset(requestedModelPreset, {
         presetDefinitions: this.modelPresetDefinitions
       });
+    }
+    if (hasExplicitModel) {
+      return normalizeManagedModelDescriptor(
+        {
+          provider: requestedProvider!,
+          modelId: requestedModelId!,
+          thinkingLevel: requestedThinkingLevel
+        },
+        { presetDefinitions: this.modelPresetDefinitions }
+      );
     }
 
     return this.normalizePersistedModelDescriptor(fallback);
