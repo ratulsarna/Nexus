@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { getByRole, getByText, queryByText } from '@testing-library/dom'
+import { fireEvent, getByRole, getByText, queryByText } from '@testing-library/dom'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
@@ -68,6 +68,13 @@ function click(element: HTMLElement): void {
   })
 }
 
+/** Scope queries to the first (desktop) aside to avoid dual-render duplicates. */
+function sidebar(): HTMLElement {
+  const el = container.querySelector('aside')
+  if (!el) throw new Error('Sidebar <aside> not found')
+  return el
+}
+
 function renderSidebar({
   agents,
   selectedAgentId = null,
@@ -113,31 +120,31 @@ describe('AgentSidebar', () => {
   it('shows workers expanded by default and toggles collapse/expand per manager', () => {
     renderSidebar({ agents: [manager('manager-alpha'), worker('worker-alpha', 'manager-alpha')] })
 
-    expect(queryByText(container, 'worker-alpha')).toBeTruthy()
+    expect(queryByText(sidebar(), 'worker-alpha')).toBeTruthy()
 
-    click(getByRole(container, 'button', { name: 'Collapse manager manager-alpha' }))
-    expect(queryByText(container, 'worker-alpha')).toBeNull()
+    click(getByRole(sidebar(), 'button', { name: 'Collapse manager manager-alpha' }))
+    expect(queryByText(sidebar(), 'worker-alpha')).toBeNull()
 
-    click(getByRole(container, 'button', { name: 'Expand manager manager-alpha' }))
-    expect(queryByText(container, 'worker-alpha')).toBeTruthy()
+    click(getByRole(sidebar(), 'button', { name: 'Expand manager manager-alpha' }))
+    expect(queryByText(sidebar(), 'worker-alpha')).toBeTruthy()
   })
 
   it('auto-expands a collapsed manager when worker count increases', () => {
     renderSidebar({ agents: [manager('manager-alpha')] })
 
-    click(getByRole(container, 'button', { name: 'Collapse manager manager-alpha' }))
-    expect(getByRole(container, 'button', { name: 'Expand manager manager-alpha' })).toBeTruthy()
-    expect(queryByText(container, 'worker-alpha')).toBeNull()
+    click(getByRole(sidebar(), 'button', { name: 'Collapse manager manager-alpha' }))
+    expect(getByRole(sidebar(), 'button', { name: 'Expand manager manager-alpha' })).toBeTruthy()
+    expect(queryByText(sidebar(), 'worker-alpha')).toBeNull()
 
     renderSidebar({
       agents: [manager('manager-alpha'), worker('worker-alpha', 'manager-alpha')],
     })
 
-    expect(queryByText(container, 'worker-alpha')).toBeTruthy()
-    expect(getByRole(container, 'button', { name: 'Collapse manager manager-alpha' })).toBeTruthy()
+    expect(queryByText(sidebar(), 'worker-alpha')).toBeTruthy()
+    expect(getByRole(sidebar(), 'button', { name: 'Collapse manager manager-alpha' })).toBeTruthy()
 
-    click(getByRole(container, 'button', { name: 'Collapse manager manager-alpha' }))
-    expect(getByRole(container, 'button', { name: 'Expand manager manager-alpha' })).toBeTruthy()
+    click(getByRole(sidebar(), 'button', { name: 'Collapse manager manager-alpha' }))
+    expect(getByRole(sidebar(), 'button', { name: 'Expand manager manager-alpha' })).toBeTruthy()
 
     renderSidebar({
       agents: [
@@ -147,9 +154,9 @@ describe('AgentSidebar', () => {
       ],
     })
 
-    expect(queryByText(container, 'worker-alpha')).toBeTruthy()
-    expect(queryByText(container, 'worker-beta')).toBeTruthy()
-    expect(getByRole(container, 'button', { name: 'Collapse manager manager-alpha' })).toBeTruthy()
+    expect(queryByText(sidebar(), 'worker-alpha')).toBeTruthy()
+    expect(queryByText(sidebar(), 'worker-beta')).toBeTruthy()
+    expect(getByRole(sidebar(), 'button', { name: 'Collapse manager manager-alpha' })).toBeTruthy()
   })
 
   it('shows runtime icons and compact model labels from model presets', () => {
@@ -161,11 +168,13 @@ describe('AgentSidebar', () => {
       ],
     })
 
-    expect(getByText(container, 'pi-codex')).toBeTruthy()
-    expect(getByText(container, 'pi-opus')).toBeTruthy()
-    expect(getByText(container, 'codex-app')).toBeTruthy()
-    expect(container.querySelectorAll('img[src="/pi-logo.svg"]').length).toBeGreaterThanOrEqual(2)
-    expect(container.querySelector('img[src="/agents/codex-logo.svg"]')).toBeTruthy()
+    // manager-pi (pi-codex): pi-logo + codex-logo
+    // worker-opus (pi-opus): pi-logo + claude-logo
+    // worker-codex (codex-app): codex-app-logo + codex-logo
+    expect(sidebar().querySelectorAll('img[src="/pi-logo.svg"]').length).toBe(2)
+    expect(sidebar().querySelectorAll('img[src="/agents/codex-logo.svg"]').length).toBe(2)
+    expect(sidebar().querySelector('img[src="/agents/claude-logo.svg"]')).toBeTruthy()
+    expect(sidebar().querySelector('img[src="/agents/codex-app-logo.svg"]')).toBeTruthy()
   })
 
   it('keeps manager selection behavior working while collapse state changes', () => {
@@ -176,14 +185,14 @@ describe('AgentSidebar', () => {
       onSelectAgent,
     })
 
-    const getManagerRowButton = () => getByText(container, 'manager-alpha').closest('button') as HTMLButtonElement
+    const getManagerRowButton = () => getByText(sidebar(), 'manager-alpha').closest('button') as HTMLButtonElement
     expect(getManagerRowButton()).toBeTruthy()
 
     click(getManagerRowButton())
     expect(onSelectAgent).toHaveBeenCalledTimes(1)
     expect(onSelectAgent).toHaveBeenLastCalledWith('manager-alpha')
 
-    click(getByRole(container, 'button', { name: 'Collapse manager manager-alpha' }))
+    click(getByRole(sidebar(), 'button', { name: 'Collapse manager manager-alpha' }))
     expect(onSelectAgent).toHaveBeenCalledTimes(1)
 
     click(getManagerRowButton())
@@ -201,11 +210,26 @@ describe('AgentSidebar', () => {
       onDeleteManager,
     })
 
-    click(getByRole(container, 'button', { name: 'Delete manager manager-alpha' }))
+    // Delete is now in context menus — right-click trigger to open, then click "Delete"
+    function openContextMenu(trigger: HTMLElement) {
+      flushSync(() => {
+        fireEvent.pointerDown(trigger, { button: 2, pointerType: 'mouse' })
+        // Radix also listens for the native contextmenu event
+        fireEvent.contextMenu(trigger)
+      })
+    }
+
+    const managerTrigger = getByText(sidebar(), 'manager-alpha').closest('[data-slot="context-menu-trigger"]') as HTMLElement
+    openContextMenu(managerTrigger)
+    click(getByText(document.body, 'Delete'))
     expect(onDeleteManager).toHaveBeenCalledTimes(1)
     expect(onDeleteManager).toHaveBeenCalledWith('manager-alpha')
 
-    click(getByRole(container, 'button', { name: 'Delete worker-alpha' }))
+    const workerTrigger = getByText(sidebar(), 'worker-alpha').closest('[data-slot="context-menu-trigger"]') as HTMLElement
+    openContextMenu(workerTrigger)
+    const deleteItems = document.body.querySelectorAll('[data-slot="context-menu-item"]')
+    const lastDelete = deleteItems[deleteItems.length - 1] as HTMLElement
+    click(lastDelete)
     expect(onDeleteAgent).toHaveBeenCalledTimes(1)
     expect(onDeleteAgent).toHaveBeenCalledWith('worker-alpha')
   })
@@ -218,7 +242,7 @@ describe('AgentSidebar', () => {
       onOpenSettings,
     })
 
-    click(getByRole(container, 'button', { name: 'Settings' }))
+    click(getByRole(sidebar(), 'button', { name: 'Settings' }))
     expect(onOpenSettings).toHaveBeenCalledTimes(1)
   })
 

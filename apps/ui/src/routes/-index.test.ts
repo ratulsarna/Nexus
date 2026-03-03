@@ -6,7 +6,20 @@ import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MANAGER_MODEL_PRESETS } from '@nexus/protocol'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { IndexPage } from './index'
+
+let mockSearch: Record<string, string> = {}
+
+vi.mock('@tanstack/react-router', () => ({
+  createFileRoute: () => (opts: any) => opts,
+  useLocation: () => ({ pathname: '/', search: mockSearch, searchStr: '' }),
+  useNavigate: () => (opts: any) => {
+    if (opts?.search) {
+      mockSearch = { ...opts.search }
+    }
+  },
+}))
 
 const CREATE_MANAGER_MODEL_PRESETS = MANAGER_MODEL_PRESETS.filter(
   (modelPreset) => modelPreset !== 'codex-app',
@@ -60,6 +73,13 @@ function click(element: HTMLElement): void {
   flushSync(() => {
     element.click()
   })
+}
+
+/** Scope to the first (desktop) aside to avoid dual-render duplicates. */
+function sidebar(): HTMLElement {
+  const el = container.querySelector('aside')
+  if (!el) throw new Error('Sidebar <aside> not found')
+  return el
 }
 
 function changeValue(element: HTMLInputElement | HTMLTextAreaElement, value: string): void {
@@ -116,6 +136,7 @@ const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
 
 beforeEach(() => {
   FakeWebSocket.instances = []
+  mockSearch = {}
   vi.useFakeTimers()
   ;(globalThis as any).WebSocket = FakeWebSocket
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
@@ -151,7 +172,7 @@ async function renderPage(): Promise<FakeWebSocket> {
   root = createRoot(container)
 
   flushSync(() => {
-    root?.render(createElement(IndexPage))
+    root?.render(createElement(TooltipProvider, null, createElement(IndexPage)))
   })
 
   await Promise.resolve()
@@ -175,7 +196,7 @@ describe('IndexPage create manager model selection', () => {
   it('shows only allowed model presets and defaults to pi-codex', async () => {
     await renderPage()
 
-    click(getByRole(container, 'button', { name: 'Add manager' }))
+    click(getByRole(sidebar(), 'button', { name: 'Add manager' }))
 
     const modelSelect = getByRole(document.body, 'combobox', { name: 'Model' })
     expect(modelSelect.textContent).toContain('pi-codex')
@@ -189,7 +210,7 @@ describe('IndexPage create manager model selection', () => {
   it('sends selected model in create_manager payload', async () => {
     const socket = await renderPage()
 
-    click(getByRole(container, 'button', { name: 'Add manager' }))
+    click(getByRole(sidebar(), 'button', { name: 'Add manager' }))
 
     changeValue(getByLabelText(document.body, 'Name') as HTMLInputElement, 'release-manager')
     changeValue(getByLabelText(document.body, 'Working directory') as HTMLInputElement, '/tmp/release')
@@ -332,9 +353,9 @@ describe('IndexPage create manager model selection', () => {
     })
 
     await vi.advanceTimersByTimeAsync(0)
-    expect(queryByText(container, 'release-worker')).not.toBeNull()
+    expect(queryByText(sidebar(), 'release-worker')).not.toBeNull()
 
-    const workerRow = queryByText(container, 'release-worker')
+    const workerRow = queryByText(sidebar(), 'release-worker')
     expect(workerRow).not.toBeNull()
     click(workerRow!.closest('button') as HTMLButtonElement)
 
