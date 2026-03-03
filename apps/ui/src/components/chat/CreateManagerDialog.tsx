@@ -16,14 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  MANAGER_MODEL_PRESETS,
-  type ManagerModelPreset,
-} from '@nexus/protocol'
-
-const CREATE_MANAGER_MODEL_PRESETS = MANAGER_MODEL_PRESETS.filter(
-  (modelPreset) => modelPreset !== 'codex-app',
-)
+import type { ThinkingLevel } from '@nexus/protocol'
 
 interface CreateManagerDialogProps {
   open: boolean
@@ -32,13 +25,21 @@ interface CreateManagerDialogProps {
   isPickingDirectory: boolean
   newManagerName: string
   newManagerCwd: string
-  newManagerModel: ManagerModelPreset
+  newManagerProvider: string
+  newManagerModelId: string
+  newManagerThinkingLevel: ThinkingLevel
+  providerOptions: Array<{ value: string; label: string }>
+  modelOptions: Array<{ value: string; label: string }>
+  thinkingOptions: Array<{ value: ThinkingLevel; label: string }>
+  createManagerSelectionHint: string | null
   createManagerError: string | null
   browseError: string | null
   onOpenChange: (open: boolean) => void
   onNameChange: (value: string) => void
   onCwdChange: (value: string) => void
-  onModelChange: (value: ManagerModelPreset) => void
+  onProviderChange: (value: string) => void
+  onModelIdChange: (value: string) => void
+  onThinkingLevelChange: (value: ThinkingLevel) => void
   onBrowseDirectory: () => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
 }
@@ -50,13 +51,21 @@ export function CreateManagerDialog({
   isPickingDirectory,
   newManagerName,
   newManagerCwd,
-  newManagerModel,
+  newManagerProvider,
+  newManagerModelId,
+  newManagerThinkingLevel,
+  providerOptions,
+  modelOptions,
+  thinkingOptions,
+  createManagerSelectionHint,
   createManagerError,
   browseError,
   onOpenChange,
   onNameChange,
   onCwdChange,
-  onModelChange,
+  onProviderChange,
+  onModelIdChange,
+  onThinkingLevelChange,
   onBrowseDirectory,
   onSubmit,
 }: CreateManagerDialogProps) {
@@ -115,26 +124,74 @@ export function CreateManagerDialog({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="manager-model" className="text-xs font-medium text-muted-foreground">
-              Model
+            <Label htmlFor="manager-provider" className="text-xs font-medium text-muted-foreground">
+              Provider
             </Label>
             <Select
-              value={newManagerModel}
-              onValueChange={(value) => onModelChange(value as ManagerModelPreset)}
+              value={newManagerProvider}
+              onValueChange={onProviderChange}
               disabled={isCreatingManager || isPickingDirectory}
             >
-              <SelectTrigger id="manager-model" className="w-full">
-                <SelectValue placeholder="Select model preset" />
+              <SelectTrigger id="manager-provider" className="w-full">
+                <SelectValue placeholder="Select provider" />
               </SelectTrigger>
               <SelectContent>
-                {CREATE_MANAGER_MODEL_PRESETS.map((modelPreset) => (
-                  <SelectItem key={modelPreset} value={modelPreset}>
-                    {modelPreset}
+                {providerOptions.map((providerOption) => (
+                  <SelectItem key={providerOption.value} value={providerOption.value}>
+                    {providerOption.label}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="manager-model" className="text-xs font-medium text-muted-foreground">
+              Model
+            </Label>
+            <Select
+              value={newManagerModelId}
+              onValueChange={onModelIdChange}
+              disabled={isCreatingManager || isPickingDirectory || modelOptions.length === 0}
+            >
+              <SelectTrigger id="manager-model" className="w-full">
+                <SelectValue placeholder="Select model" />
+              </SelectTrigger>
+              <SelectContent>
+                {modelOptions.map((modelOption) => (
+                  <SelectItem key={modelOption.value} value={modelOption.value}>
+                    {modelOption.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="manager-thinking" className="text-xs font-medium text-muted-foreground">
+              Thinking
+            </Label>
+            <Select
+              value={newManagerThinkingLevel}
+              onValueChange={(value) => onThinkingLevelChange(value as ThinkingLevel)}
+              disabled={isCreatingManager || isPickingDirectory || thinkingOptions.length === 0}
+            >
+              <SelectTrigger id="manager-thinking" className="w-full">
+                <SelectValue placeholder="Select thinking" />
+              </SelectTrigger>
+              <SelectContent>
+                {thinkingOptions.map((thinkingOption) => (
+                  <SelectItem key={thinkingOption.value} value={thinkingOption.value}>
+                    {thinkingOption.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {createManagerSelectionHint ? (
+            <p className="text-[11px] text-muted-foreground">{createManagerSelectionHint}</p>
+          ) : null}
 
           {createManagerError ? (
             <p className="text-xs text-destructive">{createManagerError}</p>

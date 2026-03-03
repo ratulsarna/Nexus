@@ -34,14 +34,12 @@ import { usePendingResponse } from '@/hooks/index-page/use-pending-response'
 import { useFileDrop } from '@/hooks/index-page/use-file-drop'
 import type {
   ConversationAttachment,
-  ManagerModelPreset,
 } from '@nexus/protocol'
 
 export const Route = createFileRoute('/')({
   component: IndexPage,
 })
 
-const DEFAULT_MANAGER_MODEL: ManagerModelPreset = 'pi-codex'
 const DEFAULT_DEV_WS_URL = 'ws://127.0.0.1:47187'
 
 function resolveDefaultWsUrl(): string {
@@ -160,7 +158,13 @@ export function IndexPage() {
     isCreateManagerDialogOpen,
     newManagerName,
     newManagerCwd,
-    newManagerModel,
+    newManagerProvider,
+    newManagerModelId,
+    newManagerThinkingLevel,
+    createManagerProviderOptions,
+    createManagerModelOptions,
+    createManagerThinkingOptions,
+    createManagerSelectionHint,
     createManagerError,
     browseError,
     isCreatingManager,
@@ -168,7 +172,9 @@ export function IndexPage() {
     isPickingDirectory,
     handleNewManagerNameChange,
     handleNewManagerCwdChange,
-    handleNewManagerModelChange,
+    handleNewManagerProviderChange,
+    handleNewManagerModelIdChange,
+    handleNewManagerThinkingLevelChange,
     handleOpenCreateManagerDialog,
     handleCreateManagerDialogOpenChange,
     handleBrowseDirectory,
@@ -190,7 +196,6 @@ export function IndexPage() {
     activeAgent,
     activeAgentId,
     isActiveManager,
-    defaultManagerModel: DEFAULT_MANAGER_MODEL,
     navigateToRoute,
     setState,
     clearPendingResponseForAgent,
@@ -450,13 +455,21 @@ export function IndexPage() {
         isPickingDirectory={isPickingDirectory}
         newManagerName={newManagerName}
         newManagerCwd={newManagerCwd}
-        newManagerModel={newManagerModel}
+        newManagerProvider={newManagerProvider}
+        newManagerModelId={newManagerModelId}
+        newManagerThinkingLevel={newManagerThinkingLevel}
+        providerOptions={createManagerProviderOptions}
+        modelOptions={createManagerModelOptions}
+        thinkingOptions={createManagerThinkingOptions}
+        createManagerSelectionHint={createManagerSelectionHint}
         createManagerError={createManagerError}
         browseError={browseError}
         onOpenChange={handleCreateManagerDialogOpenChange}
         onNameChange={handleNewManagerNameChange}
         onCwdChange={handleNewManagerCwdChange}
-        onModelChange={handleNewManagerModelChange}
+        onProviderChange={handleNewManagerProviderChange}
+        onModelIdChange={handleNewManagerModelIdChange}
+        onThinkingLevelChange={handleNewManagerThinkingLevelChange}
         onBrowseDirectory={() => {
           void handleBrowseDirectory()
         }}

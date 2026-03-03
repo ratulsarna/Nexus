@@ -769,14 +769,19 @@ describe('ManagerWsClient', () => {
     const creationPromise = client.createManager({
       name: 'release-manager',
       cwd: '/tmp/release',
-      model: 'pi-codex',
+      provider: 'openai-codex',
+      modelId: 'gpt-5.3-codex',
+      thinkingLevel: 'high',
     })
 
     const sentCreatePayload = JSON.parse(socket.sentPayloads.at(-1) ?? '{}')
     expect(sentCreatePayload.type).toBe('create_manager')
     expect(sentCreatePayload.name).toBe('release-manager')
     expect(sentCreatePayload.cwd).toBe('/tmp/release')
-    expect(sentCreatePayload.model).toBe('pi-codex')
+    expect(sentCreatePayload.provider).toBe('openai-codex')
+    expect(sentCreatePayload.modelId).toBe('gpt-5.3-codex')
+    expect(sentCreatePayload.thinkingLevel).toBe('high')
+    expect(sentCreatePayload.model).toBeUndefined()
     expect(typeof sentCreatePayload.requestId).toBe('string')
 
     emitServerEvent(socket, {

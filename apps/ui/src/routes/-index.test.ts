@@ -5,7 +5,6 @@ import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MANAGER_MODEL_PRESETS } from '@nexus/protocol'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { IndexPage } from './index'
 
@@ -20,10 +19,6 @@ vi.mock('@tanstack/react-router', () => ({
     }
   },
 }))
-
-const CREATE_MANAGER_MODEL_PRESETS = MANAGER_MODEL_PRESETS.filter(
-  (modelPreset) => modelPreset !== 'codex-app',
-)
 
 type ListenerMap = Record<string, Array<(event?: any) => void>>
 
@@ -193,21 +188,30 @@ async function renderPage(): Promise<FakeWebSocket> {
 }
 
 describe('IndexPage create manager model selection', () => {
-  it('shows only allowed model presets and defaults to pi-codex', async () => {
+  it('shows Provider -> Model -> Thinking selectors with dependent defaults', async () => {
     await renderPage()
 
     click(getByRole(sidebar(), 'button', { name: 'Add manager' }))
 
+    const providerSelect = getByRole(document.body, 'combobox', { name: 'Provider' })
     const modelSelect = getByRole(document.body, 'combobox', { name: 'Model' })
-    expect(modelSelect.textContent).toContain('pi-codex')
+    const thinkingSelect = getByRole(document.body, 'combobox', { name: 'Thinking' })
 
-    click(modelSelect as HTMLElement)
+    expect(providerSelect.textContent).toContain('OpenAI Codex')
+    expect(modelSelect.textContent).toContain('gpt-5.3-codex')
+    expect(thinkingSelect.textContent).toContain('xhigh')
+
+    click(providerSelect as HTMLElement)
 
     const optionValues = getAllByRole(document.body, 'option').map((option) => option.textContent?.trim() ?? '')
-    expect(optionValues).toEqual([...CREATE_MANAGER_MODEL_PRESETS])
+    expect(optionValues).toEqual(['OpenAI Codex', 'Anthropic', 'Claude Agent SDK'])
+
+    click(getByRole(document.body, 'option', { name: 'Anthropic' }))
+    expect(getByRole(document.body, 'combobox', { name: 'Model' }).textContent).toContain('claude-opus-4-6')
+    expect(getByRole(document.body, 'combobox', { name: 'Thinking' }).textContent).toContain('xhigh')
   })
 
-  it('sends selected model in create_manager payload', async () => {
+  it('sends selected explicit descriptor fields in create_manager payload', async () => {
     const socket = await renderPage()
 
     click(getByRole(sidebar(), 'button', { name: 'Add manager' }))
@@ -215,9 +219,13 @@ describe('IndexPage create manager model selection', () => {
     changeValue(getByLabelText(document.body, 'Name') as HTMLInputElement, 'release-manager')
     changeValue(getByLabelText(document.body, 'Working directory') as HTMLInputElement, '/tmp/release')
 
-    const modelSelect = getByRole(document.body, 'combobox', { name: 'Model' })
-    click(modelSelect as HTMLElement)
-    click(getByRole(document.body, 'option', { name: 'pi-opus' }))
+    const providerSelect = getByRole(document.body, 'combobox', { name: 'Provider' })
+    click(providerSelect as HTMLElement)
+    click(getByRole(document.body, 'option', { name: 'Anthropic' }))
+
+    const thinkingSelect = getByRole(document.body, 'combobox', { name: 'Thinking' })
+    click(thinkingSelect as HTMLElement)
+    click(getByRole(document.body, 'option', { name: 'high' }))
 
     click(getByRole(document.body, 'button', { name: 'Create manager' }))
 
@@ -241,8 +249,11 @@ describe('IndexPage create manager model selection', () => {
       type: 'create_manager',
       name: 'release-manager',
       cwd: '/tmp/release',
-      model: 'pi-opus',
+      provider: 'anthropic',
+      modelId: 'claude-opus-4-6',
+      thinkingLevel: 'high',
     })
+    expect(createPayload).not.toHaveProperty('model')
     expect(typeof createPayload?.requestId).toBe('string')
 
     emitServerEvent(socket, {

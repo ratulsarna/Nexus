@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useMemo,
   useState,
   type Dispatch,
   type FormEvent,
@@ -8,11 +9,19 @@ import {
 } from 'react'
 import { chooseFallbackAgentId } from '@/lib/agent-hierarchy'
 import { resolveApiEndpoint } from '@/lib/api-endpoint'
+import {
+  getCreateManagerAllowedThinkingLevels,
+  getCreateManagerModelOptions,
+  getCreateManagerProviderOptions,
+  getDefaultCreateManagerSelection,
+  getDefaultModelForProvider,
+  getDefaultThinkingLevel,
+} from '@/lib/create-manager-model-catalog'
 import { ManagerWsClient } from '@/lib/ws-client'
 import type { ManagerWsState } from '@/lib/ws-state'
 import type {
   AgentDescriptor,
-  ManagerModelPreset,
+  ThinkingLevel,
 } from '@nexus/protocol'
 import type { AppRouteState } from './use-route-state'
 
@@ -23,11 +32,12 @@ interface UseManagerActionsOptions {
   activeAgent: AgentDescriptor | null
   activeAgentId: string | null
   isActiveManager: boolean
-  defaultManagerModel: ManagerModelPreset
   navigateToRoute: (nextRouteState: AppRouteState, replace?: boolean) => void
   setState: Dispatch<SetStateAction<ManagerWsState>>
   clearPendingResponseForAgent: (agentId: string) => void
 }
+
+const DEFAULT_CREATE_MANAGER_SELECTION = getDefaultCreateManagerSelection()
 
 export function useManagerActions({
   wsUrl,
@@ -36,7 +46,6 @@ export function useManagerActions({
   activeAgent,
   activeAgentId,
   isActiveManager,
-  defaultManagerModel,
   navigateToRoute,
   setState,
   clearPendingResponseForAgent,
@@ -44,7 +53,13 @@ export function useManagerActions({
   isCreateManagerDialogOpen: boolean
   newManagerName: string
   newManagerCwd: string
-  newManagerModel: ManagerModelPreset
+  newManagerProvider: string
+  newManagerModelId: string
+  newManagerThinkingLevel: ThinkingLevel
+  createManagerProviderOptions: Array<{ value: string; label: string }>
+  createManagerModelOptions: Array<{ value: string; label: string }>
+  createManagerThinkingOptions: Array<{ value: ThinkingLevel; label: string }>
+  createManagerSelectionHint: string | null
   createManagerError: string | null
   browseError: string | null
   isCreatingManager: boolean
@@ -52,7 +67,9 @@ export function useManagerActions({
   isPickingDirectory: boolean
   handleNewManagerNameChange: (value: string) => void
   handleNewManagerCwdChange: (value: string) => void
-  handleNewManagerModelChange: (value: ManagerModelPreset) => void
+  handleNewManagerProviderChange: (value: string) => void
+  handleNewManagerModelIdChange: (value: string) => void
+  handleNewManagerThinkingLevelChange: (value: ThinkingLevel) => void
   handleOpenCreateManagerDialog: () => void
   handleCreateManagerDialogOpenChange: (open: boolean) => void
   handleBrowseDirectory: () => Promise<void>
@@ -71,7 +88,12 @@ export function useManagerActions({
   const [isCreateManagerDialogOpen, setIsCreateManagerDialogOpen] = useState(false)
   const [newManagerName, setNewManagerName] = useState('')
   const [newManagerCwd, setNewManagerCwd] = useState('')
-  const [newManagerModel, setNewManagerModel] = useState<ManagerModelPreset>(defaultManagerModel)
+  const [newManagerProvider, setNewManagerProvider] = useState(DEFAULT_CREATE_MANAGER_SELECTION.provider)
+  const [newManagerModelId, setNewManagerModelId] = useState(DEFAULT_CREATE_MANAGER_SELECTION.modelId)
+  const [newManagerThinkingLevel, setNewManagerThinkingLevel] = useState<ThinkingLevel>(
+    DEFAULT_CREATE_MANAGER_SELECTION.thinkingLevel,
+  )
+  const [createManagerSelectionHint, setCreateManagerSelectionHint] = useState<string | null>(null)
   const [createManagerError, setCreateManagerError] = useState<string | null>(null)
   const [isCreatingManager, setIsCreatingManager] = useState(false)
   const [isValidatingDirectory, setIsValidatingDirectory] = useState(false)
@@ -95,9 +117,93 @@ export function useManagerActions({
     setCreateManagerError(null)
   }, [])
 
-  const handleNewManagerModelChange = useCallback((value: ManagerModelPreset) => {
-    setNewManagerModel(value)
+  const createManagerProviderOptions = useMemo(() => getCreateManagerProviderOptions(), [])
+
+  const createManagerModelOptions = useMemo(
+    () => getCreateManagerModelOptions(newManagerProvider),
+    [newManagerProvider],
+  )
+
+  const createManagerThinkingOptions = useMemo(
+    () =>
+      getCreateManagerAllowedThinkingLevels(newManagerProvider, newManagerModelId).map(
+        (thinkingLevel) => ({
+          value: thinkingLevel,
+          label: thinkingLevel,
+        }),
+      ),
+    [newManagerProvider, newManagerModelId],
+  )
+
+  const handleNewManagerProviderChange = useCallback((value: string) => {
+    setNewManagerProvider(value)
     setCreateManagerError(null)
+    setCreateManagerSelectionHint(null)
+
+    const nextModelId =
+      getDefaultModelForProvider(value) ?? getCreateManagerModelOptions(value)[0]?.value ?? ''
+    const shouldResetModel = nextModelId !== newManagerModelId
+    setNewManagerModelId(nextModelId)
+
+    const nextThinkingOptions = getCreateManagerAllowedThinkingLevels(value, nextModelId)
+    const defaultThinkingLevel = getDefaultThinkingLevel(value, nextModelId)
+    const fallbackThinkingLevel =
+      (defaultThinkingLevel && nextThinkingOptions.includes(defaultThinkingLevel)
+        ? defaultThinkingLevel
+        : nextThinkingOptions[0]) ?? DEFAULT_CREATE_MANAGER_SELECTION.thinkingLevel
+
+    const nextThinkingLevel = nextThinkingOptions.includes(newManagerThinkingLevel)
+      ? newManagerThinkingLevel
+      : fallbackThinkingLevel
+    const shouldResetThinking = nextThinkingLevel !== newManagerThinkingLevel
+    setNewManagerThinkingLevel(nextThinkingLevel)
+
+    if (shouldResetModel && shouldResetThinking) {
+      setCreateManagerSelectionHint('Model and thinking were reset for the selected provider.')
+      return
+    }
+
+    if (shouldResetModel) {
+      setCreateManagerSelectionHint('Model was reset for the selected provider.')
+      return
+    }
+
+    if (shouldResetThinking) {
+      setCreateManagerSelectionHint('Thinking was reset for the selected provider.')
+    }
+  }, [newManagerModelId, newManagerThinkingLevel])
+
+  const handleNewManagerModelIdChange = useCallback((value: string) => {
+    const normalizedModelId = value.trim()
+    const nextModelId = normalizedModelId || getDefaultModelForProvider(newManagerProvider) || ''
+    setNewManagerModelId(nextModelId)
+    setCreateManagerError(null)
+    setCreateManagerSelectionHint(null)
+
+    const nextThinkingOptions = getCreateManagerAllowedThinkingLevels(newManagerProvider, nextModelId)
+    const defaultThinkingLevel = getDefaultThinkingLevel(newManagerProvider, nextModelId)
+    const fallbackThinkingLevel =
+      (defaultThinkingLevel && nextThinkingOptions.includes(defaultThinkingLevel)
+        ? defaultThinkingLevel
+        : nextThinkingOptions[0]) ?? DEFAULT_CREATE_MANAGER_SELECTION.thinkingLevel
+    const nextThinkingLevel = nextThinkingOptions.includes(newManagerThinkingLevel)
+      ? newManagerThinkingLevel
+      : fallbackThinkingLevel
+
+    if (nextThinkingLevel !== newManagerThinkingLevel) {
+      setCreateManagerSelectionHint(
+        normalizedModelId
+          ? 'Thinking was reset for the selected model.'
+          : 'Model and thinking were reset for the selected provider.',
+      )
+      setNewManagerThinkingLevel(nextThinkingLevel)
+    }
+  }, [newManagerProvider, newManagerThinkingLevel])
+
+  const handleNewManagerThinkingLevelChange = useCallback((value: ThinkingLevel) => {
+    setNewManagerThinkingLevel(value)
+    setCreateManagerError(null)
+    setCreateManagerSelectionHint(null)
   }, [])
 
   const handleCompactManager = useCallback(async (customInstructions?: string) => {
@@ -156,11 +262,14 @@ export function useManagerActions({
 
     setNewManagerName('')
     setNewManagerCwd(defaultCwd)
-    setNewManagerModel(defaultManagerModel)
+    setNewManagerProvider(DEFAULT_CREATE_MANAGER_SELECTION.provider)
+    setNewManagerModelId(DEFAULT_CREATE_MANAGER_SELECTION.modelId)
+    setNewManagerThinkingLevel(DEFAULT_CREATE_MANAGER_SELECTION.thinkingLevel)
+    setCreateManagerSelectionHint(null)
     setBrowseError(null)
     setCreateManagerError(null)
     setIsCreateManagerDialogOpen(true)
-  }, [activeAgent, agents, defaultManagerModel])
+  }, [activeAgent, agents])
 
   const handleCreateManagerDialogOpenChange = useCallback((open: boolean) => {
     if (!open && isCreatingManager) {
@@ -215,6 +324,21 @@ export function useManagerActions({
       return
     }
 
+    if (!newManagerProvider) {
+      setCreateManagerError('Provider selection is required.')
+      return
+    }
+
+    if (!newManagerModelId) {
+      setCreateManagerError('Model selection is required.')
+      return
+    }
+
+    if (!newManagerThinkingLevel) {
+      setCreateManagerError('Thinking selection is required.')
+      return
+    }
+
     setCreateManagerError(null)
     setIsCreatingManager(true)
 
@@ -231,7 +355,9 @@ export function useManagerActions({
       const manager = await client.createManager({
         name,
         cwd: validation.path || cwd,
-        model: newManagerModel,
+        provider: newManagerProvider,
+        modelId: newManagerModelId,
+        thinkingLevel: newManagerThinkingLevel,
       })
 
       navigateToRoute({ view: 'chat', agentId: manager.agentId })
@@ -240,7 +366,10 @@ export function useManagerActions({
       setIsCreateManagerDialogOpen(false)
       setNewManagerName('')
       setNewManagerCwd('')
-      setNewManagerModel(defaultManagerModel)
+      setNewManagerProvider(DEFAULT_CREATE_MANAGER_SELECTION.provider)
+      setNewManagerModelId(DEFAULT_CREATE_MANAGER_SELECTION.modelId)
+      setNewManagerThinkingLevel(DEFAULT_CREATE_MANAGER_SELECTION.thinkingLevel)
+      setCreateManagerSelectionHint(null)
       setBrowseError(null)
       setCreateManagerError(null)
     } catch (error) {
@@ -251,11 +380,12 @@ export function useManagerActions({
     }
   }, [
     clientRef,
-    defaultManagerModel,
     navigateToRoute,
     newManagerCwd,
-    newManagerModel,
+    newManagerModelId,
     newManagerName,
+    newManagerProvider,
+    newManagerThinkingLevel,
   ])
 
   const handleRequestDeleteManager = useCallback((managerId: string) => {
@@ -318,7 +448,13 @@ export function useManagerActions({
     isCreateManagerDialogOpen,
     newManagerName,
     newManagerCwd,
-    newManagerModel,
+    newManagerProvider,
+    newManagerModelId,
+    newManagerThinkingLevel,
+    createManagerProviderOptions,
+    createManagerModelOptions,
+    createManagerThinkingOptions,
+    createManagerSelectionHint,
     createManagerError,
     browseError,
     isCreatingManager,
@@ -326,7 +462,9 @@ export function useManagerActions({
     isPickingDirectory,
     handleNewManagerNameChange,
     handleNewManagerCwdChange,
-    handleNewManagerModelChange,
+    handleNewManagerProviderChange,
+    handleNewManagerModelIdChange,
+    handleNewManagerThinkingLevelChange,
     handleOpenCreateManagerDialog,
     handleCreateManagerDialogOpenChange,
     handleBrowseDirectory,

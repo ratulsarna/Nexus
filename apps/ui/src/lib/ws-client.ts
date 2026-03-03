@@ -7,14 +7,13 @@ import {
   type ManagerWsState,
 } from './ws-state'
 import {
-  MANAGER_MODEL_PRESETS,
   type AgentDescriptor,
   type ClientCommand,
   type ConversationAttachment,
   type ConversationEntry,
   type ConversationMessageEvent,
   type DeliveryMode,
-  type ManagerModelPreset,
+  type ThinkingLevel,
   type ServerEvent,
 } from '@nexus/protocol'
 
@@ -244,10 +243,18 @@ export class ManagerWsClient {
     }))
   }
 
-  async createManager(input: { name: string; cwd: string; model: ManagerModelPreset }): Promise<AgentDescriptor> {
+  async createManager(input: {
+    name: string
+    cwd: string
+    provider: string
+    modelId: string
+    thinkingLevel: ThinkingLevel
+  }): Promise<AgentDescriptor> {
     const name = input.name.trim()
     const cwd = input.cwd.trim()
-    const model = input.model
+    const provider = input.provider.trim()
+    const modelId = input.modelId.trim()
+    const thinkingLevel = input.thinkingLevel
 
     if (!name) {
       throw new Error('Manager name is required.')
@@ -257,8 +264,16 @@ export class ManagerWsClient {
       throw new Error('Manager working directory is required.')
     }
 
-    if (!MANAGER_MODEL_PRESETS.includes(model)) {
+    if (!provider) {
+      throw new Error('Manager provider is required.')
+    }
+
+    if (!modelId) {
       throw new Error('Manager model is required.')
+    }
+
+    if (!thinkingLevel) {
+      throw new Error('Manager thinking level is required.')
     }
 
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
@@ -269,7 +284,9 @@ export class ManagerWsClient {
         type: 'create_manager',
         name,
         cwd,
-        model,
+        provider,
+        modelId,
+        thinkingLevel,
         requestId,
       }))
   }
