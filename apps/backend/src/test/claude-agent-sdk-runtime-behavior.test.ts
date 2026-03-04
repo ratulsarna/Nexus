@@ -12,6 +12,8 @@ const sdkMockState = vi.hoisted(() => ({
   streams: [] as Array<unknown[]>,
   initializationResults: [] as unknown[],
   interruptAbortedSignals: [] as boolean[],
+  interruptCalls: 0,
+  closeCalls: 0,
   interruptThrowsAbortWhenSignalAborted: false,
   mcpServerCalls: [] as Array<{ name: string; tools?: Array<{ inputSchema?: unknown }> }>,
   supportedModelsResponses: [] as unknown[],
@@ -91,6 +93,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
         }
       },
       async interrupt() {
+        sdkMockState.interruptCalls += 1;
         const abortController = params.options?.abortController as AbortController | undefined;
         const aborted = Boolean(abortController?.signal.aborted);
         sdkMockState.interruptAbortedSignals.push(aborted);
@@ -102,6 +105,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
         isClosed = true;
       },
       close() {
+        sdkMockState.closeCalls += 1;
         isClosed = true;
       }
     };
@@ -174,6 +178,8 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
     sdkMockState.streams = [];
     sdkMockState.initializationResults = [];
     sdkMockState.interruptAbortedSignals = [];
+    sdkMockState.interruptCalls = 0;
+    sdkMockState.closeCalls = 0;
     sdkMockState.interruptThrowsAbortWhenSignalAborted = false;
     sdkMockState.mcpServerCalls = [];
     sdkMockState.supportedModelsResponses = [];
@@ -304,6 +310,90 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
 
     const sessionFileText = await readFile(descriptor.sessionFile, "utf8");
     expect(sessionFileText).toContain('"customType":"swarm_conversation_entry"');
+
+    await runtime.terminate({ abort: true });
+  });
+
+  it("does not force-close a query after successful delivery completion", async () => {
+    sdkMockState.streams.push([
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "session-no-close-success",
+        usage: undefined,
+        modelUsage: {}
+      }
+    ]);
+
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+
+    setAuthCredential(authFile, "claude-agent-sdk", {
+      type: "oauth",
+      access: "claude-oauth-token",
+      refresh: "",
+      expires: String(Date.now() + 60_000)
+    } as unknown as AuthCredential);
+
+    const runtime = await ClaudeAgentSdkRuntime.create({
+      descriptor: createDescriptor(rootDir),
+      callbacks: {
+        onStatusChange: async () => {}
+      },
+      systemPrompt: "You are a worker",
+      tools: [],
+      authFile
+    });
+
+    await runtime.sendMessage("no force close");
+    await waitFor(() => runtime.getPendingCount() === 0 && runtime.getStatus() === "idle");
+
+    expect(sdkMockState.closeCalls).toBe(0);
+
+    await runtime.terminate({ abort: true });
+  });
+
+  it("interrupts and closes active query when stopInFlight aborts", async () => {
+    sdkMockState.streams.push([
+      {
+        __delay: 200
+      },
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "session-stop-close",
+        usage: undefined,
+        modelUsage: {}
+      }
+    ]);
+
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+
+    setAuthCredential(authFile, "claude-agent-sdk", {
+      type: "oauth",
+      access: "claude-oauth-token",
+      refresh: "",
+      expires: String(Date.now() + 60_000)
+    } as unknown as AuthCredential);
+
+    const runtime = await ClaudeAgentSdkRuntime.create({
+      descriptor: createDescriptor(rootDir),
+      callbacks: {
+        onStatusChange: async () => {}
+      },
+      systemPrompt: "You are a worker",
+      tools: [],
+      authFile
+    });
+
+    await runtime.sendMessage("abort now");
+    await waitFor(() => sdkMockState.queryCalls.length === 1);
+    await runtime.stopInFlight({ abort: true });
+    await waitFor(() => runtime.getStatus() === "idle" && runtime.getPendingCount() === 0);
+
+    expect(sdkMockState.interruptCalls).toBeGreaterThanOrEqual(1);
+    expect(sdkMockState.closeCalls).toBeGreaterThanOrEqual(1);
 
     await runtime.terminate({ abort: true });
   });
@@ -1701,6 +1791,7 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
       expect(usageAfter).toBeDefined();
       expect(usageAfter!.tokens).toBe(10_500);
       expect(usageAfter!.tokens).toBeLessThan(usageBefore!.tokens);
+      expect(sdkMockState.closeCalls).toBe(0);
 
       await runtime.terminate({ abort: true });
     });

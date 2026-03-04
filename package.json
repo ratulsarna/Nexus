@@ -28,6 +28,9 @@
       "@tanstack/router-generator>zod": "3.25.76",
       "@tanstack/router-plugin>zod": "3.25.76",
       "@tanstack/start-plugin-core>zod": "3.25.76"
+    },
+    "patchedDependencies": {
+      "@anthropic-ai/claude-agent-sdk@0.2.66": "patches/@anthropic-ai__claude-agent-sdk@0.2.66.patch"
     }
   },
   "devDependencies": {

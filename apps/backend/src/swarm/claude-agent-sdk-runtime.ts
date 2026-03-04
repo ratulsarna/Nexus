@@ -417,7 +417,6 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
         }
       }
     } finally {
-      compactQuery.close();
       this.currentQuery = undefined;
       this.currentAbortController = undefined;
     }
@@ -790,7 +789,6 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
       }
     } finally {
       await this.completeActiveToolCalls();
-      this.currentQuery?.close();
       this.currentQuery = undefined;
       this.currentAbortController = undefined;
     }

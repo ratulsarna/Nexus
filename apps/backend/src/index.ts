@@ -7,11 +7,13 @@ import { CronSchedulerService } from "./scheduler/cron-scheduler-service.js";
 import { getScheduleFilePath } from "./scheduler/schedule-storage.js";
 import { SwarmManager } from "./swarm/swarm-manager.js";
 import type { AgentDescriptor } from "./swarm/types.js";
+import { assessUnhandledRejection } from "./utils/unhandled-rejection.js";
 import { SwarmWebSocketServer } from "./ws/server.js";
 
 const backendRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(backendRoot, "..", "..");
 loadDotenv({ path: resolve(repoRoot, ".env") });
+registerUnhandledRejectionGuard();
 
 async function main(): Promise<void> {
   const config = createConfig();
@@ -145,6 +147,28 @@ function collectManagerIds(agents: unknown[], fallbackManagerId?: string): Set<s
   }
 
   return managerIds;
+}
+
+function registerUnhandledRejectionGuard(): void {
+  process.on("unhandledRejection", (reason) => {
+    const assessed = assessUnhandledRejection(reason);
+
+    if (assessed.classification === "known_claude_sdk_shutdown_race") {
+      console.warn("[runtime] unhandled_rejection_ignored", {
+        classification: assessed.classification,
+        message: assessed.message,
+        stack: assessed.stack
+      });
+      return;
+    }
+
+    console.error("[runtime] unhandled_rejection", {
+      classification: assessed.classification,
+      message: assessed.message,
+      stack: assessed.stack
+    });
+    process.exit(1);
+  });
 }
 
 void main().catch((error) => {

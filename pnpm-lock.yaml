@@ -10,6 +10,11 @@ overrides:
   '@tanstack/router-plugin>zod': 3.25.76
   '@tanstack/start-plugin-core>zod': 3.25.76
 
+patchedDependencies:
+  '@anthropic-ai/claude-agent-sdk@0.2.66':
+    hash: b58e902387733a6c74f901e428fac941048d84a3253ab407c8c09c728bc9967a
+    path: patches/@anthropic-ai__claude-agent-sdk@0.2.66.patch
+
 importers:
 
   .:
@@ -21,8 +26,8 @@ importers:
   apps/backend:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.2.63
-        version: 0.2.63(zod@4.3.6)
+        specifier: 0.2.66
+        version: 0.2.66(patch_hash=b58e902387733a6c74f901e428fac941048d84a3253ab407c8c09c728bc9967a)(zod@4.3.6)
       '@google/genai':
         specifier: ^1.42.0
         version: 1.42.0(@modelcontextprotocol/sdk@1.26.0(zod@4.3.6))
@@ -281,8 +286,8 @@ packages:
   '@antfu/install-pkg@1.1.0':
     resolution: {integrity: sha512-MGQsmw10ZyI+EJo45CdSER4zEb+p31LpDAFp2Z3gkSd1yqVZGi0Ebx++YTEMonJy4oChEMLsxZ64j8FH6sSqtQ==}
 
-  '@anthropic-ai/claude-agent-sdk@0.2.63':
-    resolution: {integrity: sha512-ZNiaQb/v6xkbrGt3dtq5J0DGY+AaOhoehUyposa3msvlAlkTHWNGR+NhbCcTE0ML1U91xhPqMAAwZIUqrlkKyQ==}
+  '@anthropic-ai/claude-agent-sdk@0.2.66':
+    resolution: {integrity: sha512-hJL+j35yIkhcryR0kkszLz00lsEWBMu3qx8hazIHh55QV2nnZ6cn3p6oi04/VT84J9YU90jfmDffTQ66RD7YZg==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
       zod: ^4.3.6
@@ -5522,7 +5527,7 @@ snapshots:
       package-manager-detector: 1.6.0
       tinyexec: 1.0.2
 
-  '@anthropic-ai/claude-agent-sdk@0.2.63(zod@4.3.6)':
+  '@anthropic-ai/claude-agent-sdk@0.2.66(patch_hash=b58e902387733a6c74f901e428fac941048d84a3253ab407c8c09c728bc9967a)(zod@4.3.6)':
     dependencies:
       zod: 4.3.6
     optionalDependencies:
