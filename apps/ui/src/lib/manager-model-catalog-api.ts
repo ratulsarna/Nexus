@@ -1,0 +1,371 @@
+import type {
+  ManagerModelCatalogResponse,
+  ThinkingLevel,
+} from '@nexus/protocol'
+import { THINKING_LEVELS } from '@nexus/protocol'
+import { resolveApiEndpoint } from './api-endpoint'
+
+export interface CreateManagerCatalogModel {
+  modelId: string
+  modelLabel: string
+  allowedThinkingLevels: ThinkingLevel[]
+  defaultThinkingLevel: ThinkingLevel
+}
+
+export interface CreateManagerCatalogProvider {
+  provider: string
+  providerLabel: string
+  models: CreateManagerCatalogModel[]
+}
+
+export interface CreateManagerCatalog {
+  providers: CreateManagerCatalogProvider[]
+  warnings: string[]
+}
+
+export interface CreateManagerSelection {
+  provider: string
+  modelId: string
+  thinkingLevel: ThinkingLevel
+}
+
+export interface CreateManagerSelectOption {
+  value: string
+  label: string
+}
+
+const MANAGER_CREATE_SURFACE = 'create_manager'
+const THINKING_LEVEL_SET = new Set<string>(THINKING_LEVELS)
+
+export function createEmptyCreateManagerCatalog(): CreateManagerCatalog {
+  return {
+    providers: [],
+    warnings: [],
+  }
+}
+
+export async function fetchManagerModelCatalog(wsUrl: string): Promise<ManagerModelCatalogResponse> {
+  const endpoint = resolveApiEndpoint(wsUrl, '/api/models/manager-catalog')
+  const response = await fetch(endpoint)
+  if (!response.ok) {
+    throw new Error(await readApiError(response))
+  }
+
+  const payload = (await response.json().catch(() => null)) as unknown
+  if (!isRecord(payload) || !Array.isArray(payload.providers)) {
+    throw new Error('Invalid manager model catalog response.')
+  }
+
+  return payload as unknown as ManagerModelCatalogResponse
+}
+
+export function toCreateManagerCatalog(response: ManagerModelCatalogResponse): CreateManagerCatalog {
+  if (!response || !Array.isArray(response.providers)) {
+    return createEmptyCreateManagerCatalog()
+  }
+
+  const providers: CreateManagerCatalogProvider[] = []
+  const seenProviders = new Set<string>()
+
+  for (const rawProvider of response.providers) {
+    if (!isRecord(rawProvider)) {
+      continue
+    }
+
+    if (!providerSupportsCreateManager(rawProvider.surfaces)) {
+      continue
+    }
+
+    const provider = normalizeRequiredString(rawProvider.provider)
+    if (!provider) {
+      continue
+    }
+
+    const providerKey = provider.toLowerCase()
+    if (seenProviders.has(providerKey)) {
+      continue
+    }
+
+    const providerLabel = normalizeOptionalString(rawProvider.providerLabel) ?? provider
+    const models = normalizeProviderModels(rawProvider.models)
+    if (models.length === 0) {
+      continue
+    }
+
+    seenProviders.add(providerKey)
+    providers.push({
+      provider,
+      providerLabel,
+      models,
+    })
+  }
+
+  return {
+    providers,
+    warnings: normalizeWarnings(response.warnings),
+  }
+}
+
+export function getDefaultCreateManagerSelection(catalog: CreateManagerCatalog): CreateManagerSelection | null {
+  const firstProvider = catalog.providers[0]
+  const firstModel = firstProvider?.models[0]
+  if (!firstProvider || !firstModel) {
+    return null
+  }
+
+  return {
+    provider: firstProvider.provider,
+    modelId: firstModel.modelId,
+    thinkingLevel: firstModel.defaultThinkingLevel,
+  }
+}
+
+export function getCreateManagerProviderOptions(
+  catalog: CreateManagerCatalog,
+): CreateManagerSelectOption[] {
+  return catalog.providers.map((provider) => ({
+    value: provider.provider,
+    label: provider.providerLabel,
+  }))
+}
+
+export function getCreateManagerModelOptions(
+  catalog: CreateManagerCatalog,
+  provider: string,
+): CreateManagerSelectOption[] {
+  const providerEntry = findProvider(catalog, provider)
+  if (!providerEntry) {
+    return []
+  }
+
+  return providerEntry.models.map((model) => ({
+    value: model.modelId,
+    label: model.modelLabel,
+  }))
+}
+
+export function getCreateManagerAllowedThinkingLevels(
+  catalog: CreateManagerCatalog,
+  provider: string,
+  modelId: string,
+): ThinkingLevel[] {
+  const model = findModel(catalog, provider, modelId)
+  if (!model) {
+    return []
+  }
+
+  return [...model.allowedThinkingLevels]
+}
+
+export function getCreateManagerDefaultModelForProvider(
+  catalog: CreateManagerCatalog,
+  provider: string,
+): string | undefined {
+  return findProvider(catalog, provider)?.models[0]?.modelId
+}
+
+export function getCreateManagerDefaultThinkingLevel(
+  catalog: CreateManagerCatalog,
+  provider: string,
+  modelId: string,
+): ThinkingLevel | undefined {
+  return findModel(catalog, provider, modelId)?.defaultThinkingLevel
+}
+
+export function isCreateManagerDescriptorSupported(
+  catalog: CreateManagerCatalog,
+  provider: string,
+  modelId: string,
+): boolean {
+  return Boolean(findModel(catalog, provider, modelId))
+}
+
+function findProvider(catalog: CreateManagerCatalog, provider: string): CreateManagerCatalogProvider | undefined {
+  const normalizedProvider = provider.trim().toLowerCase()
+  if (!normalizedProvider) {
+    return undefined
+  }
+
+  return catalog.providers.find(
+    (entry) => entry.provider.trim().toLowerCase() === normalizedProvider,
+  )
+}
+
+function findModel(
+  catalog: CreateManagerCatalog,
+  provider: string,
+  modelId: string,
+): CreateManagerCatalogModel | undefined {
+  const providerEntry = findProvider(catalog, provider)
+  if (!providerEntry) {
+    return undefined
+  }
+
+  const normalizedModelId = modelId.trim().toLowerCase()
+  if (!normalizedModelId) {
+    return undefined
+  }
+
+  return providerEntry.models.find(
+    (model) => model.modelId.trim().toLowerCase() === normalizedModelId,
+  )
+}
+
+function normalizeProviderModels(value: unknown): CreateManagerCatalogModel[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  const models: CreateManagerCatalogModel[] = []
+  const seenModelIds = new Set<string>()
+
+  for (const rawModel of value) {
+    const model = normalizeModel(rawModel)
+    if (!model) {
+      continue
+    }
+
+    const modelKey = model.modelId.toLowerCase()
+    if (seenModelIds.has(modelKey)) {
+      continue
+    }
+
+    seenModelIds.add(modelKey)
+    models.push(model)
+  }
+
+  return models
+}
+
+function normalizeModel(value: unknown): CreateManagerCatalogModel | null {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const modelId = normalizeRequiredString(value.modelId)
+  if (!modelId) {
+    return null
+  }
+
+  const allowedThinkingLevels = normalizeThinkingLevels(value.allowedThinkingLevels)
+  if (allowedThinkingLevels.length === 0) {
+    return null
+  }
+
+  const defaultThinkingLevelRaw = normalizeOptionalString(value.defaultThinkingLevel)
+  const defaultThinkingLevel = defaultThinkingLevelRaw && THINKING_LEVEL_SET.has(defaultThinkingLevelRaw)
+    ? (defaultThinkingLevelRaw as ThinkingLevel)
+    : undefined
+
+  return {
+    modelId,
+    modelLabel: normalizeOptionalString(value.modelLabel) ?? modelId,
+    allowedThinkingLevels,
+    defaultThinkingLevel:
+      defaultThinkingLevel && allowedThinkingLevels.includes(defaultThinkingLevel)
+        ? defaultThinkingLevel
+        : allowedThinkingLevels[0],
+  }
+}
+
+function normalizeThinkingLevels(value: unknown): ThinkingLevel[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  const allowed = new Set<ThinkingLevel>()
+
+  for (const rawThinkingLevel of value) {
+    if (typeof rawThinkingLevel !== 'string') {
+      continue
+    }
+
+    const normalized = rawThinkingLevel.trim()
+    if (!normalized || !THINKING_LEVEL_SET.has(normalized)) {
+      continue
+    }
+
+    allowed.add(normalized as ThinkingLevel)
+  }
+
+  return THINKING_LEVELS.filter((thinkingLevel) => allowed.has(thinkingLevel))
+}
+
+function providerSupportsCreateManager(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false
+  }
+
+  return value.some(
+    (surface) =>
+      typeof surface === 'string' &&
+      surface.trim().toLowerCase() === MANAGER_CREATE_SURFACE,
+  )
+}
+
+function normalizeWarnings(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  const warnings = new Set<string>()
+  for (const warning of value) {
+    if (typeof warning !== 'string') {
+      continue
+    }
+    const normalized = warning.trim()
+    if (!normalized) {
+      continue
+    }
+    warnings.add(normalized)
+  }
+
+  return [...warnings]
+}
+
+function normalizeRequiredString(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  const normalized = value.trim()
+  return normalized.length > 0 ? normalized : null
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+
+  const normalized = value.trim()
+  return normalized.length > 0 ? normalized : undefined
+}
+
+async function readApiError(response: Response): Promise<string> {
+  try {
+    const payload = (await response.json()) as { error?: unknown; message?: unknown }
+    if (typeof payload.error === 'string' && payload.error.trim()) {
+      return payload.error
+    }
+    if (typeof payload.message === 'string' && payload.message.trim()) {
+      return payload.message
+    }
+  } catch {
+    // Ignore JSON parsing errors and fall back to text/status.
+  }
+
+  try {
+    const bodyText = await response.text()
+    if (bodyText.trim().length > 0) {
+      return bodyText
+    }
+  } catch {
+    // Ignore text parsing errors and fall back to status.
+  }
+
+  return `Request failed (${response.status})`
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}

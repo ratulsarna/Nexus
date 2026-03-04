@@ -5,6 +5,7 @@ import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ManagerModelCatalogResponse } from '@nexus/protocol'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { IndexPage } from './index'
 
@@ -127,13 +128,56 @@ let container: HTMLDivElement
 let root: Root | null = null
 
 const originalWebSocket = globalThis.WebSocket
+const originalFetch = globalThis.fetch
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+let fetchMock: ReturnType<typeof vi.fn>
+let mockCatalogStatus = 200
+let mockCatalogError = 'Catalog unavailable.'
+let mockCatalogResponse: ManagerModelCatalogResponse = createDefaultCatalogResponse()
 
 beforeEach(() => {
   FakeWebSocket.instances = []
   mockSearch = {}
+  mockCatalogStatus = 200
+  mockCatalogError = 'Catalog unavailable.'
+  mockCatalogResponse = createDefaultCatalogResponse()
+  fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url
+
+    if (url.endsWith('/api/models/manager-catalog')) {
+      if (mockCatalogStatus !== 200) {
+        return new Response(
+          JSON.stringify({ error: mockCatalogError }),
+          {
+            status: mockCatalogStatus,
+            headers: {
+              'content-type': 'application/json',
+            },
+          },
+        )
+      }
+
+      return new Response(
+        JSON.stringify(mockCatalogResponse),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+          },
+        },
+      )
+    }
+
+    throw new Error(`Unexpected fetch request: ${url}`)
+  })
+
   vi.useFakeTimers()
   ;(globalThis as any).WebSocket = FakeWebSocket
+  ;(globalThis as any).fetch = fetchMock
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
     configurable: true,
     writable: true,
@@ -156,6 +200,7 @@ afterEach(() => {
 
   vi.useRealTimers()
   ;(globalThis as any).WebSocket = originalWebSocket
+  ;(globalThis as any).fetch = originalFetch
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
     configurable: true,
     writable: true,
@@ -188,18 +233,23 @@ async function renderPage(): Promise<FakeWebSocket> {
 }
 
 describe('IndexPage create manager model selection', () => {
-  it('shows Provider -> Model -> Thinking selectors with dependent defaults', async () => {
+  it('shows dynamic Provider -> Model -> Thinking selectors and applies dependency resets', async () => {
     await renderPage()
 
     click(getByRole(sidebar(), 'button', { name: 'Add manager' }))
+    expect(queryByText(document.body, 'Loading model catalog...')).not.toBeNull()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => {
+      expect(getByRole(document.body, 'combobox', { name: 'Provider' }).textContent).toContain('OpenAI Codex')
+    })
 
     const providerSelect = getByRole(document.body, 'combobox', { name: 'Provider' })
     const modelSelect = getByRole(document.body, 'combobox', { name: 'Model' })
-    const thinkingSelect = getByRole(document.body, 'combobox', { name: 'Thinking' })
 
     expect(providerSelect.textContent).toContain('OpenAI Codex')
     expect(modelSelect.textContent).toContain('gpt-5.3-codex')
-    expect(thinkingSelect.textContent).toContain('xhigh')
 
     click(providerSelect as HTMLElement)
 
@@ -208,13 +258,22 @@ describe('IndexPage create manager model selection', () => {
 
     click(getByRole(document.body, 'option', { name: 'Anthropic' }))
     expect(getByRole(document.body, 'combobox', { name: 'Model' }).textContent).toContain('claude-opus-4-6')
-    expect(getByRole(document.body, 'combobox', { name: 'Thinking' }).textContent).toContain('xhigh')
+    expect(getByRole(document.body, 'combobox', { name: 'Thinking' }).textContent).toContain('high')
+
+    click(modelSelect as HTMLElement)
+    click(getByRole(document.body, 'option', { name: 'claude-sonnet-4-5' }))
+
+    const updatedThinkingSelect = getByRole(document.body, 'combobox', { name: 'Thinking' })
+    click(updatedThinkingSelect as HTMLElement)
+    const thinkingOptionValues = getAllByRole(document.body, 'option').map((option) => option.textContent?.trim() ?? '')
+    expect(thinkingOptionValues).toEqual(['off', 'low'])
   })
 
   it('sends selected explicit descriptor fields in create_manager payload', async () => {
     const socket = await renderPage()
 
     click(getByRole(sidebar(), 'button', { name: 'Add manager' }))
+    await vi.advanceTimersByTimeAsync(0)
 
     changeValue(getByLabelText(document.body, 'Name') as HTMLInputElement, 'release-manager')
     changeValue(getByLabelText(document.body, 'Working directory') as HTMLInputElement, '/tmp/release')
@@ -223,9 +282,13 @@ describe('IndexPage create manager model selection', () => {
     click(providerSelect as HTMLElement)
     click(getByRole(document.body, 'option', { name: 'Anthropic' }))
 
+    const modelSelect = getByRole(document.body, 'combobox', { name: 'Model' })
+    click(modelSelect as HTMLElement)
+    click(getByRole(document.body, 'option', { name: 'claude-sonnet-4-5' }))
+
     const thinkingSelect = getByRole(document.body, 'combobox', { name: 'Thinking' })
     click(thinkingSelect as HTMLElement)
-    click(getByRole(document.body, 'option', { name: 'high' }))
+    click(getByRole(document.body, 'option', { name: 'off' }))
 
     click(getByRole(document.body, 'button', { name: 'Create manager' }))
 
@@ -250,8 +313,8 @@ describe('IndexPage create manager model selection', () => {
       name: 'release-manager',
       cwd: '/tmp/release',
       provider: 'anthropic',
-      modelId: 'claude-opus-4-6',
-      thinkingLevel: 'high',
+      modelId: 'claude-sonnet-4-5',
+      thinkingLevel: 'off',
     })
     expect(createPayload).not.toHaveProperty('model')
     expect(typeof createPayload?.requestId).toBe('string')
@@ -263,6 +326,62 @@ describe('IndexPage create manager model selection', () => {
     })
 
     await vi.advanceTimersByTimeAsync(0)
+  })
+
+  it('blocks submit when catalog is empty and no valid descriptor can be selected', async () => {
+    mockCatalogResponse = {
+      fetchedAt: new Date().toISOString(),
+      providers: [
+        {
+          provider: 'openai-codex-app-server',
+          providerLabel: 'OpenAI Codex App Server',
+          surfaces: ['manager_settings'],
+          models: [
+            {
+              modelId: 'default',
+              modelLabel: 'default',
+              allowedThinkingLevels: ['off', 'high'],
+              defaultThinkingLevel: 'high',
+            },
+          ],
+        },
+      ],
+    }
+
+    const socket = await renderPage()
+
+    click(getByRole(sidebar(), 'button', { name: 'Add manager' }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(queryByText(document.body, 'No manager model options are available right now.')).not.toBeNull()
+
+    changeValue(getByLabelText(document.body, 'Name') as HTMLInputElement, 'release-manager')
+    changeValue(getByLabelText(document.body, 'Working directory') as HTMLInputElement, '/tmp/release')
+    click(getByRole(document.body, 'button', { name: 'Create manager' }))
+
+    const parsedPayloads = socket.sentPayloads.map((payload) => JSON.parse(payload))
+    expect(parsedPayloads.some((payload) => payload.type === 'validate_directory')).toBe(false)
+    expect(parsedPayloads.some((payload) => payload.type === 'create_manager')).toBe(false)
+  })
+
+  it('handles catalog API failures without crashing and blocks create submit', async () => {
+    mockCatalogStatus = 500
+    mockCatalogError = 'Catalog request failed.'
+
+    const socket = await renderPage()
+
+    click(getByRole(sidebar(), 'button', { name: 'Add manager' }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(queryByText(document.body, 'Catalog request failed.')).not.toBeNull()
+
+    changeValue(getByLabelText(document.body, 'Name') as HTMLInputElement, 'release-manager')
+    changeValue(getByLabelText(document.body, 'Working directory') as HTMLInputElement, '/tmp/release')
+    click(getByRole(document.body, 'button', { name: 'Create manager' }))
+
+    const parsedPayloads = socket.sentPayloads.map((payload) => JSON.parse(payload))
+    expect(parsedPayloads.some((payload) => payload.type === 'validate_directory')).toBe(false)
+    expect(parsedPayloads.some((payload) => payload.type === 'create_manager')).toBe(false)
   })
 
   it('hides worker tool calls in all-tab activity for the selected manager context', async () => {
@@ -411,3 +530,75 @@ describe('IndexPage create manager model selection', () => {
     })
   })
 })
+
+function createDefaultCatalogResponse(): ManagerModelCatalogResponse {
+  return {
+    fetchedAt: '2026-01-01T00:00:00.000Z',
+    providers: [
+      {
+        provider: 'openai-codex',
+        providerLabel: 'OpenAI Codex',
+        surfaces: ['create_manager', 'manager_settings'],
+        models: [
+          {
+            modelId: 'gpt-5.3-codex',
+            modelLabel: 'gpt-5.3-codex',
+            allowedThinkingLevels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+            defaultThinkingLevel: 'xhigh',
+          },
+          {
+            modelId: 'gpt-5.3-mini',
+            modelLabel: 'gpt-5.3-mini',
+            allowedThinkingLevels: ['off', 'low', 'medium'],
+            defaultThinkingLevel: 'medium',
+          },
+        ],
+      },
+      {
+        provider: 'anthropic',
+        providerLabel: 'Anthropic',
+        surfaces: ['create_manager', 'manager_settings'],
+        models: [
+          {
+            modelId: 'claude-opus-4-6',
+            modelLabel: 'claude-opus-4-6',
+            allowedThinkingLevels: ['off', 'high'],
+            defaultThinkingLevel: 'high',
+          },
+          {
+            modelId: 'claude-sonnet-4-5',
+            modelLabel: 'claude-sonnet-4-5',
+            allowedThinkingLevels: ['off', 'low'],
+            defaultThinkingLevel: 'low',
+          },
+        ],
+      },
+      {
+        provider: 'claude-agent-sdk',
+        providerLabel: 'Claude Agent SDK',
+        surfaces: ['create_manager', 'manager_settings'],
+        models: [
+          {
+            modelId: 'claude-opus-4-6',
+            modelLabel: 'claude-opus-4-6',
+            allowedThinkingLevels: ['off', 'minimal', 'medium', 'high'],
+            defaultThinkingLevel: 'high',
+          },
+        ],
+      },
+      {
+        provider: 'openai-codex-app-server',
+        providerLabel: 'OpenAI Codex App Server',
+        surfaces: ['manager_settings'],
+        models: [
+          {
+            modelId: 'default',
+            modelLabel: 'default',
+            allowedThinkingLevels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+            defaultThinkingLevel: 'xhigh',
+          },
+        ],
+      },
+    ],
+  }
+}

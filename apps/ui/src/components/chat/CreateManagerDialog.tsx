@@ -28,6 +28,9 @@ interface CreateManagerDialogProps {
   newManagerProvider: string
   newManagerModelId: string
   newManagerThinkingLevel: ThinkingLevel
+  isLoadingCreateManagerCatalog: boolean
+  createManagerCatalogError: string | null
+  isCreateManagerSubmitDisabled: boolean
   providerOptions: Array<{ value: string; label: string }>
   modelOptions: Array<{ value: string; label: string }>
   thinkingOptions: Array<{ value: ThinkingLevel; label: string }>
@@ -54,6 +57,9 @@ export function CreateManagerDialog({
   newManagerProvider,
   newManagerModelId,
   newManagerThinkingLevel,
+  isLoadingCreateManagerCatalog,
+  createManagerCatalogError,
+  isCreateManagerSubmitDisabled,
   providerOptions,
   modelOptions,
   thinkingOptions,
@@ -130,7 +136,7 @@ export function CreateManagerDialog({
             <Select
               value={newManagerProvider}
               onValueChange={onProviderChange}
-              disabled={isCreatingManager || isPickingDirectory}
+              disabled={isCreatingManager || isPickingDirectory || isLoadingCreateManagerCatalog || providerOptions.length === 0}
             >
               <SelectTrigger id="manager-provider" className="w-full">
                 <SelectValue placeholder="Select provider" />
@@ -152,7 +158,12 @@ export function CreateManagerDialog({
             <Select
               value={newManagerModelId}
               onValueChange={onModelIdChange}
-              disabled={isCreatingManager || isPickingDirectory || modelOptions.length === 0}
+              disabled={
+                isCreatingManager ||
+                isPickingDirectory ||
+                isLoadingCreateManagerCatalog ||
+                modelOptions.length === 0
+              }
             >
               <SelectTrigger id="manager-model" className="w-full">
                 <SelectValue placeholder="Select model" />
@@ -174,7 +185,12 @@ export function CreateManagerDialog({
             <Select
               value={newManagerThinkingLevel}
               onValueChange={(value) => onThinkingLevelChange(value as ThinkingLevel)}
-              disabled={isCreatingManager || isPickingDirectory || thinkingOptions.length === 0}
+              disabled={
+                isCreatingManager ||
+                isPickingDirectory ||
+                isLoadingCreateManagerCatalog ||
+                thinkingOptions.length === 0
+              }
             >
               <SelectTrigger id="manager-thinking" className="w-full">
                 <SelectValue placeholder="Select thinking" />
@@ -193,6 +209,22 @@ export function CreateManagerDialog({
             <p className="text-[11px] text-muted-foreground">{createManagerSelectionHint}</p>
           ) : null}
 
+          {isLoadingCreateManagerCatalog ? (
+            <p className="text-[11px] text-muted-foreground">Loading model catalog...</p>
+          ) : null}
+
+          {!isLoadingCreateManagerCatalog && createManagerCatalogError ? (
+            <p className="text-xs text-destructive">{createManagerCatalogError}</p>
+          ) : null}
+
+          {!isLoadingCreateManagerCatalog &&
+          !createManagerCatalogError &&
+          providerOptions.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground">
+              No manager model options are available right now.
+            </p>
+          ) : null}
+
           {createManagerError ? (
             <p className="text-xs text-destructive">{createManagerError}</p>
           ) : null}
@@ -206,7 +238,7 @@ export function CreateManagerDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={isCreatingManager || isPickingDirectory}>
+            <Button type="submit" disabled={isCreateManagerSubmitDisabled}>
               {isCreatingManager
                 ? isValidatingDirectory
                   ? 'Validating...'

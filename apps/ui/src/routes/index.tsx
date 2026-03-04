@@ -162,6 +162,9 @@ export function IndexPage() {
     newManagerProvider,
     newManagerModelId,
     newManagerThinkingLevel,
+    isLoadingCreateManagerCatalog,
+    createManagerCatalogError,
+    isCreateManagerSubmitDisabled,
     createManagerProviderOptions,
     createManagerModelOptions,
     createManagerThinkingOptions,
@@ -472,6 +475,9 @@ export function IndexPage() {
         newManagerProvider={newManagerProvider}
         newManagerModelId={newManagerModelId}
         newManagerThinkingLevel={newManagerThinkingLevel}
+        isLoadingCreateManagerCatalog={isLoadingCreateManagerCatalog}
+        createManagerCatalogError={createManagerCatalogError}
+        isCreateManagerSubmitDisabled={isCreateManagerSubmitDisabled}
         providerOptions={createManagerProviderOptions}
         modelOptions={createManagerModelOptions}
         thinkingOptions={createManagerThinkingOptions}
