@@ -1107,7 +1107,11 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
       options: {
         cwd: this.descriptor.cwd,
         model: this.descriptor.model.modelId,
-        systemPrompt: this.systemPrompt,
+        systemPrompt: {
+          type: "preset",
+          preset: "claude_code",
+          append: this.systemPrompt
+        },
         settingSources: options.settingSources,
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,

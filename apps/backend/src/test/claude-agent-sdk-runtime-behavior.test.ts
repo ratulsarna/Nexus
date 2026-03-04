@@ -434,11 +434,19 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
 
     const env = sdkMockState.queryCalls[0]?.options?.env as Record<string, string | undefined> | undefined;
     const settingSources = sdkMockState.queryCalls[0]?.options?.settingSources as string[] | undefined;
+    const systemPrompt = sdkMockState.queryCalls[0]?.options?.systemPrompt as
+      | { type?: string; preset?: string; append?: string }
+      | undefined;
     expect(env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("claude-oauth-token");
     expect(env?.CLAUDE_CODE_OAUTH_REFRESH_TOKEN).toBe("claude-refresh-token");
     expect(env?.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
     expect(settingSources).toEqual(["project"]);
+    expect(systemPrompt).toEqual({
+      type: "preset",
+      preset: "claude_code",
+      append: "You are a worker"
+    });
 
     await runtime.terminate({ abort: true });
   });
