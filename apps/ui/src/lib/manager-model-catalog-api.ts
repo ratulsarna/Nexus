@@ -35,6 +35,7 @@ export interface CreateManagerSelectOption {
 }
 
 const MANAGER_CREATE_SURFACE = 'create_manager'
+const MANAGER_SETTINGS_SURFACE = 'manager_settings'
 const THINKING_LEVEL_SET = new Set<string>(THINKING_LEVELS)
 
 export function createEmptyCreateManagerCatalog(): CreateManagerCatalog {
@@ -60,6 +61,68 @@ export async function fetchManagerModelCatalog(wsUrl: string): Promise<ManagerMo
 }
 
 export function toCreateManagerCatalog(response: ManagerModelCatalogResponse): CreateManagerCatalog {
+  return toCatalogForSurface(response, MANAGER_CREATE_SURFACE)
+}
+
+export function toManagerSettingsCatalog(response: ManagerModelCatalogResponse): CreateManagerCatalog {
+  return toCatalogForSurface(response, MANAGER_SETTINGS_SURFACE)
+}
+
+export function getCatalogProviderLabel(
+  catalog: CreateManagerCatalog,
+  provider: string,
+): string {
+  return findProvider(catalog, provider)?.providerLabel ?? provider
+}
+
+export function getManagerSettingsProviderOptions(
+  catalog: CreateManagerCatalog,
+): CreateManagerSelectOption[] {
+  return getCreateManagerProviderOptions(catalog)
+}
+
+export function getManagerSettingsModelOptions(
+  catalog: CreateManagerCatalog,
+  provider: string,
+): CreateManagerSelectOption[] {
+  return getCreateManagerModelOptions(catalog, provider)
+}
+
+export function getManagerSettingsAllowedThinkingLevels(
+  catalog: CreateManagerCatalog,
+  provider: string,
+  modelId: string,
+): ThinkingLevel[] {
+  return getCreateManagerAllowedThinkingLevels(catalog, provider, modelId)
+}
+
+export function getManagerSettingsDefaultModelForProvider(
+  catalog: CreateManagerCatalog,
+  provider: string,
+): string | undefined {
+  return getCreateManagerDefaultModelForProvider(catalog, provider)
+}
+
+export function getManagerSettingsDefaultThinkingLevel(
+  catalog: CreateManagerCatalog,
+  provider: string,
+  modelId: string,
+): ThinkingLevel | undefined {
+  return getCreateManagerDefaultThinkingLevel(catalog, provider, modelId)
+}
+
+export function isSupportedManagerSettingsDescriptor(
+  catalog: CreateManagerCatalog,
+  provider: string,
+  modelId: string,
+): boolean {
+  return isCreateManagerDescriptorSupported(catalog, provider, modelId)
+}
+
+function toCatalogForSurface(
+  response: ManagerModelCatalogResponse,
+  surface: string,
+): CreateManagerCatalog {
   if (!response || !Array.isArray(response.providers)) {
     return createEmptyCreateManagerCatalog()
   }
@@ -72,7 +135,7 @@ export function toCreateManagerCatalog(response: ManagerModelCatalogResponse): C
       continue
     }
 
-    if (!providerSupportsCreateManager(rawProvider.surfaces)) {
+    if (!providerSupportsSurface(rawProvider.surfaces, surface)) {
       continue
     }
 
@@ -291,15 +354,17 @@ function normalizeThinkingLevels(value: unknown): ThinkingLevel[] {
   return THINKING_LEVELS.filter((thinkingLevel) => allowed.has(thinkingLevel))
 }
 
-function providerSupportsCreateManager(value: unknown): boolean {
+function providerSupportsSurface(value: unknown, surface: string): boolean {
   if (!Array.isArray(value)) {
     return false
   }
 
+  const normalizedSurface = surface.trim().toLowerCase()
+
   return value.some(
-    (surface) =>
-      typeof surface === 'string' &&
-      surface.trim().toLowerCase() === MANAGER_CREATE_SURFACE,
+    (entry) =>
+      typeof entry === 'string' &&
+      entry.trim().toLowerCase() === normalizedSurface,
   )
 }
 

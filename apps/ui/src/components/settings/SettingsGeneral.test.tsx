@@ -2,7 +2,7 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentDescriptor } from '@nexus/protocol'
+import type { AgentDescriptor, ManagerModelCatalogResponse } from '@nexus/protocol'
 import { SettingsGeneral } from './SettingsGeneral'
 import * as settingsApi from './settings-api'
 import type { ClaudeOutputStyleState } from './settings-types'
@@ -86,11 +86,108 @@ function createUpdateManagerMock(
   )
 }
 
+function createRuntimeCatalogResponse(): ManagerModelCatalogResponse {
+  return {
+    fetchedAt: '2026-01-01T00:00:00.000Z',
+    providers: [
+      {
+        provider: 'openai-codex',
+        providerLabel: 'OpenAI Codex',
+        surfaces: ['create_manager', 'manager_settings'],
+        models: [
+          {
+            modelId: 'gpt-5.3-codex',
+            modelLabel: 'gpt-5.3-codex',
+            allowedThinkingLevels: ['off', 'high'],
+            defaultThinkingLevel: 'high',
+          },
+          {
+            modelId: 'gpt-5.3-mini',
+            modelLabel: 'gpt-5.3-mini',
+            allowedThinkingLevels: ['off', 'low'],
+            defaultThinkingLevel: 'low',
+          },
+        ],
+      },
+      {
+        provider: 'anthropic',
+        providerLabel: 'Anthropic',
+        surfaces: ['manager_settings'],
+        models: [
+          {
+            modelId: 'claude-opus-4-6',
+            modelLabel: 'claude-opus-4-6',
+            allowedThinkingLevels: ['off', 'medium', 'high'],
+            defaultThinkingLevel: 'high',
+          },
+        ],
+      },
+      {
+        provider: 'openai-codex-app-server',
+        providerLabel: 'OpenAI Codex App Server',
+        surfaces: ['create_manager'],
+        models: [
+          {
+            modelId: 'default',
+            modelLabel: 'default',
+            allowedThinkingLevels: ['off', 'high'],
+            defaultThinkingLevel: 'high',
+          },
+        ],
+      },
+    ],
+  }
+}
+
+async function waitForRuntimeCatalogReady(): Promise<void> {
+  await waitFor(() => {
+    expect(screen.queryByText('Loading runtime model catalog...')).toBeNull()
+  })
+}
+
 describe('SettingsGeneral', () => {
   const originalResizeObserver = globalThis.ResizeObserver
   const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+  const originalFetch = globalThis.fetch
+  let mockRuntimeCatalogStatus = 200
+  let mockRuntimeCatalogError = 'Runtime catalog unavailable.'
+  let mockRuntimeCatalogResponse: ManagerModelCatalogResponse = createRuntimeCatalogResponse()
 
   beforeEach(() => {
+    mockRuntimeCatalogStatus = 200
+    mockRuntimeCatalogError = 'Runtime catalog unavailable.'
+    mockRuntimeCatalogResponse = createRuntimeCatalogResponse()
+
+    ;(globalThis as { fetch?: typeof fetch }).fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+
+      if (url.includes('/api/models/manager-catalog')) {
+        if (mockRuntimeCatalogStatus !== 200) {
+          return new Response(
+            JSON.stringify({ error: mockRuntimeCatalogError }),
+            {
+              status: mockRuntimeCatalogStatus,
+              headers: { 'content-type': 'application/json' },
+            },
+          )
+        }
+
+        return new Response(
+          JSON.stringify(mockRuntimeCatalogResponse),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`)
+    }) as unknown as typeof fetch
+
     class MockResizeObserver {
       observe(): void {}
       unobserve(): void {}
@@ -108,6 +205,7 @@ describe('SettingsGeneral', () => {
   afterEach(() => {
     cleanup()
     ;(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver = originalResizeObserver
+    ;(globalThis as { fetch?: typeof fetch }).fetch = originalFetch
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
       configurable: true,
       writable: true,
@@ -299,6 +397,7 @@ describe('SettingsGeneral', () => {
       />,
     )
 
+    await waitForRuntimeCatalogReady()
     fireEvent.click(screen.getByRole('button', { name: 'Save manager settings' }))
 
     await waitFor(() => {
@@ -315,6 +414,127 @@ describe('SettingsGeneral', () => {
     expect(
       screen.getByText('Manager settings saved. No runtime reset was needed.'),
     ).toBeTruthy()
+  })
+
+  it('renders runtime descriptor options from dynamic catalog and updates thinking options when model changes', async () => {
+    const manager = createManager(
+      'manager-a',
+      'Manager A',
+      {
+        provider: 'openai-codex',
+        modelId: 'gpt-5.3-codex',
+        thinkingLevel: 'high',
+      },
+    )
+
+    render(
+      <SettingsGeneral
+        wsUrl="ws://127.0.0.1:47187"
+        managers={[manager]}
+        onUpdateManager={createUpdateManagerMock()}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading runtime model catalog...')).toBeNull()
+    })
+
+    const providerSelect = screen.getByRole('combobox', { name: 'Manager runtime provider' })
+    fireEvent.click(providerSelect)
+    const providerOptions = await screen.findAllByRole('option')
+    expect(providerOptions.map((option) => option.textContent?.trim())).toEqual([
+      'OpenAI Codex',
+      'Anthropic',
+    ])
+    fireEvent.click(await screen.findByRole('option', { name: 'OpenAI Codex' }))
+
+    const modelSelect = screen.getByRole('combobox', { name: 'Manager runtime model' })
+    fireEvent.click(modelSelect)
+    fireEvent.click(await screen.findByRole('option', { name: 'gpt-5.3-mini' }))
+
+    const thinkingSelect = screen.getByRole('combobox', { name: 'Manager runtime thinking' })
+    fireEvent.click(thinkingSelect)
+    const thinkingOptions = await screen.findAllByRole('option')
+    expect(thinkingOptions.map((option) => option.textContent?.trim())).toEqual(['off', 'low'])
+  })
+
+  it('blocks runtime save when stale thinking level is no longer supported by selected model', async () => {
+    const staleThinkingManager = createManager(
+      'manager-stale',
+      'Stale Thinking Manager',
+      {
+        provider: 'openai-codex',
+        modelId: 'gpt-5.3-codex',
+        thinkingLevel: 'xhigh',
+      },
+    )
+    const onUpdateManager = createUpdateManagerMock()
+
+    render(
+      <SettingsGeneral
+        wsUrl="ws://127.0.0.1:47187"
+        managers={[staleThinkingManager]}
+        onUpdateManager={onUpdateManager}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading runtime model catalog...')).toBeNull()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save manager settings' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected thinking level is not available for this model.')).toBeTruthy()
+    })
+    expect(onUpdateManager).not.toHaveBeenCalled()
+  })
+
+  it('allows prompt-only save for unsupported descriptors', async () => {
+    const unsupportedManager = createManager(
+      'manager-unsupported',
+      'Unsupported Manager',
+      {
+        provider: 'custom-provider',
+        modelId: 'custom-model',
+        thinkingLevel: 'medium',
+      },
+      'old prompt',
+    )
+
+    const onUpdateManager = createUpdateManagerMock(async (input) => ({
+      manager: {
+        ...unsupportedManager,
+        promptOverride: String(input.promptOverride ?? ''),
+      },
+      resetApplied: false,
+    }))
+
+    render(
+      <SettingsGeneral
+        wsUrl="ws://127.0.0.1:47187"
+        managers={[unsupportedManager]}
+        onUpdateManager={onUpdateManager}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading runtime model catalog...')).toBeNull()
+    })
+
+    fireEvent.change(screen.getByLabelText('Manager runtime prompt override'), {
+      target: { value: 'new prompt' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save manager settings' }))
+
+    await waitFor(() => {
+      expect(onUpdateManager).toHaveBeenCalledTimes(1)
+    })
+    expect(onUpdateManager).toHaveBeenCalledWith({
+      managerId: 'manager-unsupported',
+      promptOverride: 'new prompt',
+    })
   })
 
   it('preserves runtime save feedback after same-manager props refresh', async () => {
@@ -346,6 +566,7 @@ describe('SettingsGeneral', () => {
       />,
     )
 
+    await waitForRuntimeCatalogReady()
     fireEvent.click(screen.getByRole('button', { name: 'Save manager settings' }))
 
     await waitFor(() => {
@@ -401,6 +622,7 @@ describe('SettingsGeneral', () => {
       />,
     )
 
+    await waitForRuntimeCatalogReady()
     fireEvent.click(screen.getByRole('button', { name: 'Save manager settings' }))
 
     await waitFor(() => {
@@ -446,6 +668,93 @@ describe('SettingsGeneral', () => {
         onUpdateManager={onUpdateManager}
       />,
     )
+
+    await waitForRuntimeCatalogReady()
+    fireEvent.click(screen.getByRole('button', { name: 'Save manager settings' }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Current model is unsupported in this editor. Choose a supported model to save.'),
+      ).toBeTruthy()
+    })
+    expect(onUpdateManager).not.toHaveBeenCalled()
+  })
+
+  it('shows runtime catalog API failure and keeps runtime save gated safely', async () => {
+    mockRuntimeCatalogStatus = 500
+    mockRuntimeCatalogError = 'Runtime catalog request failed.'
+
+    const manager = createManager(
+      'manager-a',
+      'Manager A',
+      {
+        provider: 'openai-codex',
+        modelId: 'gpt-5.3-codex',
+        thinkingLevel: 'high',
+      },
+    )
+    const onUpdateManager = createUpdateManagerMock()
+
+    render(
+      <SettingsGeneral
+        wsUrl="ws://127.0.0.1:47187"
+        managers={[manager]}
+        onUpdateManager={onUpdateManager}
+      />,
+    )
+
+    await screen.findByText('Runtime catalog request failed.')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save manager settings' }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Current model is unsupported in this editor. Choose a supported model to save.'),
+      ).toBeTruthy()
+    })
+    expect(onUpdateManager).not.toHaveBeenCalled()
+  })
+
+  it('handles empty runtime catalog responses without crashing and keeps save blocked', async () => {
+    mockRuntimeCatalogResponse = {
+      fetchedAt: '2026-01-01T00:00:00.000Z',
+      providers: [
+        {
+          provider: 'openai-codex',
+          providerLabel: 'OpenAI Codex',
+          surfaces: ['create_manager'],
+          models: [
+            {
+              modelId: 'gpt-5.3-codex',
+              modelLabel: 'gpt-5.3-codex',
+              allowedThinkingLevels: ['off', 'high'],
+              defaultThinkingLevel: 'high',
+            },
+          ],
+        },
+      ],
+    }
+
+    const manager = createManager(
+      'manager-a',
+      'Manager A',
+      {
+        provider: 'openai-codex',
+        modelId: 'gpt-5.3-codex',
+        thinkingLevel: 'high',
+      },
+    )
+    const onUpdateManager = createUpdateManagerMock()
+
+    render(
+      <SettingsGeneral
+        wsUrl="ws://127.0.0.1:47187"
+        managers={[manager]}
+        onUpdateManager={onUpdateManager}
+      />,
+    )
+
+    await screen.findByText('No runtime model options are available right now.')
 
     fireEvent.click(screen.getByRole('button', { name: 'Save manager settings' }))
 

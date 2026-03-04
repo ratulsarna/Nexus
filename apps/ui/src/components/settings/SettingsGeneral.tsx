@@ -17,14 +17,17 @@ import {
 } from '@/lib/theme'
 import { resolveApiEndpoint } from '@/lib/api-endpoint'
 import {
+  createEmptyCreateManagerCatalog,
+  fetchManagerModelCatalog,
+  getCatalogProviderLabel,
   getManagerSettingsAllowedThinkingLevels,
   getManagerSettingsDefaultModelForProvider,
   getManagerSettingsDefaultThinkingLevel,
   getManagerSettingsModelOptions,
-  getManagerSettingsProviderLabel,
   getManagerSettingsProviderOptions,
   isSupportedManagerSettingsDescriptor,
-} from '@/lib/manager-settings-model-catalog'
+  toManagerSettingsCatalog,
+} from '@/lib/manager-model-catalog-api'
 import type { UpdateManagerInput, UpdateManagerResult } from '@/lib/ws-client'
 import type { AgentDescriptor, ThinkingLevel } from '@nexus/protocol'
 import { fetchClaudeOutputStyle, toErrorMessage, updateClaudeOutputStyle } from './settings-api'
@@ -65,12 +68,16 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
   )
 
   const [selectedRuntimeManagerId, setSelectedRuntimeManagerId] = useState('')
+  const [runtimeCatalog, setRuntimeCatalog] = useState(createEmptyCreateManagerCatalog)
+  const [isLoadingRuntimeCatalog, setIsLoadingRuntimeCatalog] = useState(false)
+  const [runtimeCatalogError, setRuntimeCatalogError] = useState<string | null>(null)
   const [runtimeDraft, setRuntimeDraft] = useState<ManagerRuntimeDraft | null>(null)
   const [runtimeSelectionHint, setRuntimeSelectionHint] = useState<string | null>(null)
   const [runtimeSaveError, setRuntimeSaveError] = useState<string | null>(null)
   const [runtimeSaveSuccess, setRuntimeSaveSuccess] = useState<string | null>(null)
   const [isSavingRuntimeSettings, setIsSavingRuntimeSettings] = useState(false)
   const runtimeSaveRequestIdRef = useRef(0)
+  const runtimeCatalogRequestIdRef = useRef(0)
   const previousRuntimeManagerIdRef = useRef<string>('')
   const selectedRuntimeManagerIdRef = useRef('')
   selectedRuntimeManagerIdRef.current = selectedRuntimeManagerId
@@ -123,8 +130,40 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
     setRuntimeDraft(toManagerRuntimeDraft(selectedRuntimeManager))
   }, [selectedRuntimeManager])
 
+  useEffect(() => {
+    const requestId = ++runtimeCatalogRequestIdRef.current
+    setIsLoadingRuntimeCatalog(true)
+    setRuntimeCatalogError(null)
+
+    void (async () => {
+      try {
+        const response = await fetchManagerModelCatalog(wsUrl)
+        if (requestId !== runtimeCatalogRequestIdRef.current) {
+          return
+        }
+
+        const nextCatalog = toManagerSettingsCatalog(response)
+        setRuntimeCatalog(nextCatalog)
+        if (nextCatalog.providers.length === 0) {
+          setRuntimeCatalogError('No runtime model options are available right now.')
+        }
+      } catch (error) {
+        if (requestId !== runtimeCatalogRequestIdRef.current) {
+          return
+        }
+
+        setRuntimeCatalog(createEmptyCreateManagerCatalog())
+        setRuntimeCatalogError(toErrorMessage(error))
+      } finally {
+        if (requestId === runtimeCatalogRequestIdRef.current) {
+          setIsLoadingRuntimeCatalog(false)
+        }
+      }
+    })()
+  }, [wsUrl])
+
   const runtimeProviderOptions = useMemo(() => {
-    const options = getManagerSettingsProviderOptions()
+    const options = getManagerSettingsProviderOptions(runtimeCatalog)
     const currentProvider = runtimeDraft?.provider
     if (!currentProvider || options.some((option) => option.value === currentProvider)) {
       return options
@@ -134,17 +173,17 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
       ...options,
       {
         value: currentProvider,
-        label: `${getManagerSettingsProviderLabel(currentProvider)} (unsupported)`,
+        label: `${getCatalogProviderLabel(runtimeCatalog, currentProvider)} (unsupported)`,
       },
     ]
-  }, [runtimeDraft?.provider])
+  }, [runtimeCatalog, runtimeDraft?.provider])
 
   const runtimeModelOptions = useMemo(() => {
     if (!runtimeDraft) {
       return []
     }
 
-    const options = getManagerSettingsModelOptions(runtimeDraft.provider)
+    const options = getManagerSettingsModelOptions(runtimeCatalog, runtimeDraft.provider)
     if (options.some((option) => option.value === runtimeDraft.modelId)) {
       return options
     }
@@ -156,7 +195,7 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
         label: `${runtimeDraft.modelId} (unsupported)`,
       },
     ]
-  }, [runtimeDraft])
+  }, [runtimeCatalog, runtimeDraft])
 
   const runtimeThinkingOptions = useMemo(() => {
     if (!runtimeDraft) {
@@ -164,6 +203,7 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
     }
 
     const allowedThinkingLevels = getManagerSettingsAllowedThinkingLevels(
+      runtimeCatalog,
       runtimeDraft.provider,
       runtimeDraft.modelId,
     )
@@ -173,7 +213,7 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
     }
 
     return [...allowedThinkingLevels, runtimeDraft.thinkingLevel]
-  }, [runtimeDraft])
+  }, [runtimeCatalog, runtimeDraft])
 
   const resetRuntimeFeedback = useCallback(() => {
     setRuntimeSaveError(null)
@@ -190,13 +230,13 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
       resetRuntimeFeedback()
 
       const nextModelId =
-        getManagerSettingsDefaultModelForProvider(nextProvider) ??
-        getManagerSettingsModelOptions(nextProvider)[0]?.value ??
+        getManagerSettingsDefaultModelForProvider(runtimeCatalog, nextProvider) ??
+        getManagerSettingsModelOptions(runtimeCatalog, nextProvider)[0]?.value ??
         current.modelId
       const shouldResetModel = nextModelId !== current.modelId
 
-      const nextThinkingOptions = getManagerSettingsAllowedThinkingLevels(nextProvider, nextModelId)
-      const defaultThinkingLevel = getManagerSettingsDefaultThinkingLevel(nextProvider, nextModelId)
+      const nextThinkingOptions = getManagerSettingsAllowedThinkingLevels(runtimeCatalog, nextProvider, nextModelId)
+      const defaultThinkingLevel = getManagerSettingsDefaultThinkingLevel(runtimeCatalog, nextProvider, nextModelId)
       const fallbackThinkingLevel =
         (defaultThinkingLevel && nextThinkingOptions.includes(defaultThinkingLevel)
           ? defaultThinkingLevel
@@ -222,7 +262,7 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
         thinkingLevel: nextThinkingLevel,
       }
     })
-  }, [resetRuntimeFeedback])
+  }, [resetRuntimeFeedback, runtimeCatalog])
 
   const handleRuntimeModelChange = useCallback((nextModelId: string) => {
     setRuntimeDraft((current) => {
@@ -232,8 +272,8 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
 
       resetRuntimeFeedback()
 
-      const nextThinkingOptions = getManagerSettingsAllowedThinkingLevels(current.provider, nextModelId)
-      const defaultThinkingLevel = getManagerSettingsDefaultThinkingLevel(current.provider, nextModelId)
+      const nextThinkingOptions = getManagerSettingsAllowedThinkingLevels(runtimeCatalog, current.provider, nextModelId)
+      const defaultThinkingLevel = getManagerSettingsDefaultThinkingLevel(runtimeCatalog, current.provider, nextModelId)
       const fallbackThinkingLevel =
         (defaultThinkingLevel && nextThinkingOptions.includes(defaultThinkingLevel)
           ? defaultThinkingLevel
@@ -253,7 +293,7 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
         thinkingLevel: nextThinkingLevel,
       }
     })
-  }, [resetRuntimeFeedback])
+  }, [resetRuntimeFeedback, runtimeCatalog])
 
   const handleRuntimeThinkingChange = useCallback((nextThinkingLevel: ThinkingLevel) => {
     setRuntimeDraft((current) => {
@@ -304,7 +344,14 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
       return
     }
 
+    if (isLoadingRuntimeCatalog) {
+      setRuntimeSaveError('Runtime model catalog is still loading. Please wait.')
+      setRuntimeSaveSuccess(null)
+      return
+    }
+
     const descriptorSupported = isSupportedManagerSettingsDescriptor(
+      runtimeCatalog,
       runtimeDraft.provider,
       runtimeDraft.modelId,
     )
@@ -322,6 +369,7 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
     }
 
     const allowedThinkingLevels = getManagerSettingsAllowedThinkingLevels(
+      runtimeCatalog,
       runtimeDraft.provider,
       runtimeDraft.modelId,
     )
@@ -387,7 +435,7 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
         setIsSavingRuntimeSettings(false)
       }
     }
-  }, [onUpdateManager, runtimeDraft, selectedRuntimeManager])
+  }, [isLoadingRuntimeCatalog, onUpdateManager, runtimeCatalog, runtimeDraft, selectedRuntimeManager])
 
   const claudeManagers = useMemo(
     () =>
@@ -618,7 +666,7 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
               <Select
                 value={runtimeDraft?.provider ?? ''}
                 onValueChange={handleRuntimeProviderChange}
-                disabled={isSavingRuntimeSettings || !runtimeDraft}
+                disabled={isSavingRuntimeSettings || isLoadingRuntimeCatalog || !runtimeDraft || runtimeProviderOptions.length === 0}
               >
                 <SelectTrigger aria-label="Manager runtime provider" className="w-full sm:w-72">
                   <SelectValue placeholder="Select provider" />
@@ -640,7 +688,7 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
               <Select
                 value={runtimeDraft?.modelId ?? ''}
                 onValueChange={handleRuntimeModelChange}
-                disabled={isSavingRuntimeSettings || !runtimeDraft || runtimeModelOptions.length === 0}
+                disabled={isSavingRuntimeSettings || isLoadingRuntimeCatalog || !runtimeDraft || runtimeModelOptions.length === 0}
               >
                 <SelectTrigger aria-label="Manager runtime model" className="w-full sm:w-72">
                   <SelectValue placeholder="Select model" />
@@ -662,7 +710,7 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
               <Select
                 value={runtimeDraft?.thinkingLevel ?? ''}
                 onValueChange={(value) => handleRuntimeThinkingChange(value as ThinkingLevel)}
-                disabled={isSavingRuntimeSettings || !runtimeDraft || runtimeThinkingOptions.length === 0}
+                disabled={isSavingRuntimeSettings || isLoadingRuntimeCatalog || !runtimeDraft || runtimeThinkingOptions.length === 0}
               >
                 <SelectTrigger aria-label="Manager runtime thinking" className="w-full sm:w-72">
                   <SelectValue placeholder="Select thinking" />
@@ -697,7 +745,7 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={!runtimeDraft || isSavingRuntimeSettings}
+                    disabled={!runtimeDraft || isSavingRuntimeSettings || isLoadingRuntimeCatalog}
                     onClick={() => {
                       void handleSaveRuntimeSettings()
                     }}
@@ -710,6 +758,26 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
 
             {runtimeSelectionHint ? (
               <p className="text-[11px] text-muted-foreground">{runtimeSelectionHint}</p>
+            ) : null}
+
+            {isLoadingRuntimeCatalog ? (
+              <p className="text-[11px] text-muted-foreground">Loading runtime model catalog...</p>
+            ) : null}
+
+            {!isLoadingRuntimeCatalog && runtimeCatalogError ? (
+              <p className="text-xs text-destructive">{runtimeCatalogError}</p>
+            ) : null}
+
+            {!isLoadingRuntimeCatalog && !runtimeCatalogError && runtimeProviderOptions.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground">
+                No runtime model options are available right now.
+              </p>
+            ) : null}
+
+            {!isLoadingRuntimeCatalog && runtimeCatalog.warnings.length > 0 ? (
+              <p className="text-[11px] text-amber-700">
+                {runtimeCatalog.warnings.join(' ')}
+              </p>
             ) : null}
 
             {runtimeSaveError ? (
