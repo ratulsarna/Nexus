@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage, type AuthCredential } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import type { RuntimeErrorEvent, SwarmRuntimeCallbacks } from "../swarm/runtime-types.js";
+import type { RuntimeErrorEvent, RuntimeSessionEvent, SwarmRuntimeCallbacks } from "../swarm/runtime-types.js";
 import type { AgentDescriptor } from "../swarm/types.js";
 
 const sdkMockState = vi.hoisted(() => ({
@@ -1637,5 +1637,589 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  describe("compaction", () => {
+    it("sends /compact with custom instructions and updates context usage", async () => {
+      sdkMockState.streams.push(
+        [
+          {
+            type: "assistant",
+            session_id: "session-compact-1",
+            message: { content: [{ type: "text", text: "ok" }] }
+          },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "session-compact-1",
+            usage: { input_tokens: 100_000, output_tokens: 5_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+            modelUsage: { "claude-opus-4-6": { contextWindow: 200_000 } }
+          }
+        ],
+        [
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "session-compact-1",
+            usage: { input_tokens: 10_000, output_tokens: 500, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+            modelUsage: { "claude-opus-4-6": { contextWindow: 200_000 } }
+          }
+        ]
+      );
+
+      const rootDir = await createRuntimeRootDir();
+      const authFile = join(rootDir, "auth", "auth.json");
+
+      setAuthCredential(authFile, "claude-agent-sdk", {
+        type: "oauth",
+        access: "claude-oauth-token",
+        refresh: "",
+        expires: String(Date.now() + 60_000)
+      } as unknown as AuthCredential);
+
+      const runtime = await ClaudeAgentSdkRuntime.create({
+        descriptor: createDescriptor(rootDir),
+        callbacks: { onStatusChange: async () => {} },
+        systemPrompt: "You are a worker",
+        tools: [],
+        authFile
+      });
+
+      await runtime.sendMessage("hello");
+      await waitFor(() => runtime.getStatus() === "idle");
+
+      const usageBefore = runtime.getContextUsage();
+      expect(usageBefore).toBeDefined();
+      expect(usageBefore!.tokens).toBe(105_000);
+
+      await runtime.compact("summarize key decisions");
+
+      const compactCall = sdkMockState.queryCalls[sdkMockState.queryCalls.length - 1];
+      expect(compactCall?.prompt).toBe("/compact summarize key decisions");
+
+      const usageAfter = runtime.getContextUsage();
+      expect(usageAfter).toBeDefined();
+      expect(usageAfter!.tokens).toBe(10_500);
+      expect(usageAfter!.tokens).toBeLessThan(usageBefore!.tokens);
+
+      await runtime.terminate({ abort: true });
+    });
+
+    it("sends bare /compact when no custom instructions provided", async () => {
+      sdkMockState.streams.push([
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "session-compact-bare",
+          usage: { input_tokens: 5_000, output_tokens: 200, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+          modelUsage: { "claude-opus-4-6": { contextWindow: 200_000 } }
+        }
+      ]);
+
+      const rootDir = await createRuntimeRootDir();
+      const authFile = join(rootDir, "auth", "auth.json");
+
+      setAuthCredential(authFile, "claude-agent-sdk", {
+        type: "oauth",
+        access: "claude-oauth-token",
+        refresh: "",
+        expires: String(Date.now() + 60_000)
+      } as unknown as AuthCredential);
+
+      const runtime = await ClaudeAgentSdkRuntime.create({
+        descriptor: createDescriptor(rootDir),
+        callbacks: { onStatusChange: async () => {} },
+        systemPrompt: "You are a worker",
+        tools: [],
+        authFile
+      });
+
+      await runtime.compact();
+
+      expect(sdkMockState.queryCalls).toHaveLength(1);
+      expect(sdkMockState.queryCalls[0]?.prompt).toBe("/compact");
+
+      await runtime.terminate({ abort: true });
+    });
+
+    it("throws when compact is called while busy", async () => {
+      sdkMockState.streams.push([
+        { __delay: 500 },
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "session-busy",
+          usage: undefined,
+          modelUsage: {}
+        }
+      ]);
+
+      const rootDir = await createRuntimeRootDir();
+      const authFile = join(rootDir, "auth", "auth.json");
+
+      setAuthCredential(authFile, "claude-agent-sdk", {
+        type: "oauth",
+        access: "claude-oauth-token",
+        refresh: "",
+        expires: String(Date.now() + 60_000)
+      } as unknown as AuthCredential);
+
+      const runtime = await ClaudeAgentSdkRuntime.create({
+        descriptor: createDescriptor(rootDir),
+        callbacks: { onStatusChange: async () => {} },
+        systemPrompt: "You are a worker",
+        tools: [],
+        authFile
+      });
+
+      await runtime.sendMessage("hello");
+      await waitFor(() => runtime.getStatus() === "streaming");
+
+      await expect(runtime.compact()).rejects.toThrow(/cannot compact while busy/);
+
+      await waitFor(() => runtime.getStatus() === "idle");
+      await runtime.terminate({ abort: true });
+    });
+
+    it("throws when compact is called on terminated runtime", async () => {
+      const rootDir = await createRuntimeRootDir();
+      const authFile = join(rootDir, "auth", "auth.json");
+
+      setAuthCredential(authFile, "claude-agent-sdk", {
+        type: "oauth",
+        access: "claude-oauth-token",
+        refresh: "",
+        expires: String(Date.now() + 60_000)
+      } as unknown as AuthCredential);
+
+      const runtime = await ClaudeAgentSdkRuntime.create({
+        descriptor: createDescriptor(rootDir),
+        callbacks: { onStatusChange: async () => {} },
+        systemPrompt: "You are a worker",
+        tools: [],
+        authFile
+      });
+
+      await runtime.terminate();
+
+      await expect(runtime.compact()).rejects.toThrow(/terminated/);
+    });
+
+    it("rejects second compact call while first is in progress", async () => {
+      sdkMockState.streams.push([
+        { __delay: 200 },
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "session-double",
+          usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+          modelUsage: { "claude-opus-4-6": { contextWindow: 200_000 } }
+        }
+      ]);
+
+      const rootDir = await createRuntimeRootDir();
+      const authFile = join(rootDir, "auth", "auth.json");
+
+      setAuthCredential(authFile, "claude-agent-sdk", {
+        type: "oauth",
+        access: "claude-oauth-token",
+        refresh: "",
+        expires: String(Date.now() + 60_000)
+      } as unknown as AuthCredential);
+
+      const runtime = await ClaudeAgentSdkRuntime.create({
+        descriptor: createDescriptor(rootDir),
+        callbacks: { onStatusChange: async () => {} },
+        systemPrompt: "You are a worker",
+        tools: [],
+        authFile
+      });
+
+      const firstCompact = runtime.compact();
+      await expect(runtime.compact()).rejects.toThrow(/cannot compact while busy|already compacting/);
+
+      await firstCompact;
+      await runtime.terminate({ abort: true });
+    });
+
+    it("resets isCompacting flag on failure so runtime remains usable", async () => {
+      sdkMockState.streams.push(
+        [{ __throw: "compaction failed: context too small" }],
+        [
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "session-recover",
+            usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+            modelUsage: { "claude-opus-4-6": { contextWindow: 200_000 } }
+          }
+        ]
+      );
+
+      const rootDir = await createRuntimeRootDir();
+      const authFile = join(rootDir, "auth", "auth.json");
+
+      setAuthCredential(authFile, "claude-agent-sdk", {
+        type: "oauth",
+        access: "claude-oauth-token",
+        refresh: "",
+        expires: String(Date.now() + 60_000)
+      } as unknown as AuthCredential);
+
+      const runtime = await ClaudeAgentSdkRuntime.create({
+        descriptor: createDescriptor(rootDir),
+        callbacks: { onStatusChange: async () => {} },
+        systemPrompt: "You are a worker",
+        tools: [],
+        authFile
+      });
+
+      await expect(runtime.compact()).rejects.toThrow(/compaction failed/);
+
+      // Runtime should be usable again — compact() should not leave it in a broken state
+      await runtime.compact();
+      expect(sdkMockState.queryCalls).toHaveLength(2);
+
+      await runtime.terminate({ abort: true });
+    });
+
+    it("emits auto_compaction_start and auto_compaction_end events for SDK auto-compaction during a query", async () => {
+      sdkMockState.streams.push([
+        {
+          type: "assistant",
+          session_id: "session-auto-compact",
+          message: { content: [{ type: "text", text: "working..." }] }
+        },
+        {
+          type: "system",
+          subtype: "status",
+          status: "compacting",
+          uuid: "uuid-1",
+          session_id: "session-auto-compact"
+        },
+        {
+          type: "system",
+          subtype: "compact_boundary",
+          compact_metadata: { trigger: "auto", pre_tokens: 180_000 },
+          uuid: "uuid-2",
+          session_id: "session-auto-compact"
+        },
+        {
+          type: "assistant",
+          session_id: "session-auto-compact",
+          message: { content: [{ type: "text", text: "done after compaction" }] }
+        },
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "session-auto-compact",
+          usage: { input_tokens: 50_000, output_tokens: 1_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+          modelUsage: { "claude-opus-4-6": { contextWindow: 200_000 } }
+        }
+      ]);
+
+      const rootDir = await createRuntimeRootDir();
+      const authFile = join(rootDir, "auth", "auth.json");
+
+      setAuthCredential(authFile, "claude-agent-sdk", {
+        type: "oauth",
+        access: "claude-oauth-token",
+        refresh: "",
+        expires: String(Date.now() + 60_000)
+      } as unknown as AuthCredential);
+
+      const sessionEvents: RuntimeSessionEvent[] = [];
+
+      const runtime = await ClaudeAgentSdkRuntime.create({
+        descriptor: createDescriptor(rootDir),
+        callbacks: {
+          onStatusChange: async () => {},
+          onSessionEvent: async (_agentId, event) => {
+            sessionEvents.push(event);
+          }
+        },
+        systemPrompt: "You are a worker",
+        tools: [],
+        authFile
+      });
+
+      await runtime.sendMessage("do something big");
+      await waitFor(() => runtime.getStatus() === "idle");
+
+      const compactionEvents = sessionEvents.filter(
+        (e) => e.type === "auto_compaction_start" || e.type === "auto_compaction_end"
+      );
+
+      expect(compactionEvents).toHaveLength(2);
+      expect(compactionEvents[0]!.type).toBe("auto_compaction_start");
+      expect(compactionEvents[1]!.type).toBe("auto_compaction_end");
+
+      await runtime.terminate({ abort: true });
+    });
+
+    it("captures session id from compaction messages", async () => {
+      sdkMockState.streams.push(
+        [
+          {
+            type: "assistant",
+            session_id: "session-before-compact",
+            message: { content: [{ type: "text", text: "ok" }] }
+          },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "session-before-compact",
+            usage: undefined,
+            modelUsage: {}
+          }
+        ],
+        [
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "session-after-compact",
+            usage: { input_tokens: 1_000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+            modelUsage: { "claude-opus-4-6": { contextWindow: 200_000 } }
+          }
+        ],
+        [
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "session-after-compact",
+            usage: undefined,
+            modelUsage: {}
+          }
+        ]
+      );
+
+      const rootDir = await createRuntimeRootDir();
+      const authFile = join(rootDir, "auth", "auth.json");
+
+      setAuthCredential(authFile, "claude-agent-sdk", {
+        type: "oauth",
+        access: "claude-oauth-token",
+        refresh: "",
+        expires: String(Date.now() + 60_000)
+      } as unknown as AuthCredential);
+
+      const runtime = await ClaudeAgentSdkRuntime.create({
+        descriptor: createDescriptor(rootDir),
+        callbacks: { onStatusChange: async () => {} },
+        systemPrompt: "You are a worker",
+        tools: [],
+        authFile
+      });
+
+      await runtime.sendMessage("first message");
+      await waitFor(() => runtime.getStatus() === "idle");
+
+      // First query should not have resume
+      expect(sdkMockState.queryCalls[0]?.options?.resume).toBeUndefined();
+
+      await runtime.compact();
+
+      // Compact query should resume with the first session id
+      expect(sdkMockState.queryCalls[1]?.options?.resume).toBe("session-before-compact");
+
+      await runtime.sendMessage("after compact");
+      await waitFor(() => runtime.getStatus() === "idle");
+
+      // Next query should use the session id from compaction result
+      expect(sdkMockState.queryCalls[2]?.options?.resume).toBe("session-after-compact");
+
+      await runtime.terminate({ abort: true });
+    });
+
+    it("drains messages queued during compaction after compaction completes", async () => {
+      sdkMockState.streams.push(
+        // Stream 1: compaction (with delay so sendMessage runs mid-compact)
+        [
+          { __delay: 50 },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "session-compact",
+            usage: { input_tokens: 500, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+            modelUsage: { "claude-opus-4-6": { contextWindow: 200_000 } }
+          }
+        ],
+        // Stream 2: queued message processed after compaction
+        [
+          {
+            type: "assistant",
+            session_id: "session-compact",
+            message: { content: [{ type: "text", text: "processed after compact" }] }
+          },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "session-compact",
+            usage: { input_tokens: 600, output_tokens: 60, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+            modelUsage: { "claude-opus-4-6": { contextWindow: 200_000 } }
+          }
+        ]
+      );
+
+      const rootDir = await createRuntimeRootDir();
+      const authFile = join(rootDir, "auth", "auth.json");
+
+      setAuthCredential(authFile, "claude-agent-sdk", {
+        type: "oauth",
+        access: "claude-oauth-token",
+        refresh: "",
+        expires: String(Date.now() + 60_000)
+      } as unknown as AuthCredential);
+
+      const runtime = await ClaudeAgentSdkRuntime.create({
+        descriptor: createDescriptor(rootDir),
+        callbacks: { onStatusChange: async () => {} },
+        systemPrompt: "You are a worker",
+        tools: [],
+        authFile
+      });
+
+      // Start compaction; while it's running, send a message
+      const compactPromise = runtime.compact();
+      // Give compaction a moment to set isCompacting and start the query
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await runtime.sendMessage("queued during compact");
+
+      await compactPromise;
+
+      // The queued message should be drained after compaction completes
+      await waitFor(() => runtime.getStatus() === "idle" && runtime.getPendingCount() === 0);
+
+      expect(sdkMockState.queryCalls).toHaveLength(2);
+      expect(sdkMockState.queryCalls[0]?.prompt).toBe("/compact");
+      expect(sdkMockState.queryCalls[1]?.prompt).toBe("queued during compact");
+
+      await runtime.terminate({ abort: true });
+    });
+
+    it("retries compaction once when resume ID is stale", async () => {
+      sdkMockState.streams.push(
+        // Stream 1: initial message to set session ID
+        [
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "stale-session",
+            usage: undefined,
+            modelUsage: {}
+          }
+        ],
+        // Stream 2: compaction attempt 1 — resume failure
+        [{ __throw: "No conversation found with session ID stale-session" }],
+        // Stream 3: compaction attempt 2 — succeeds without resume
+        [
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "new-session",
+            usage: { input_tokens: 1_000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+            modelUsage: { "claude-opus-4-6": { contextWindow: 200_000 } }
+          }
+        ]
+      );
+
+      const rootDir = await createRuntimeRootDir();
+      const authFile = join(rootDir, "auth", "auth.json");
+
+      setAuthCredential(authFile, "claude-agent-sdk", {
+        type: "oauth",
+        access: "claude-oauth-token",
+        refresh: "",
+        expires: String(Date.now() + 60_000)
+      } as unknown as AuthCredential);
+
+      const runtime = await ClaudeAgentSdkRuntime.create({
+        descriptor: createDescriptor(rootDir),
+        callbacks: { onStatusChange: async () => {} },
+        systemPrompt: "You are a worker",
+        tools: [],
+        authFile
+      });
+
+      // First message sets session ID
+      await runtime.sendMessage("setup");
+      await waitFor(() => runtime.getStatus() === "idle");
+
+      // Compact should retry once on stale session ID
+      await runtime.compact();
+
+      expect(sdkMockState.queryCalls).toHaveLength(3);
+      // First compact attempt uses stale resume
+      expect(sdkMockState.queryCalls[1]?.options?.resume).toBe("stale-session");
+      // Second compact attempt has no resume (cleared)
+      expect(sdkMockState.queryCalls[2]?.options?.resume).toBeUndefined();
+
+      await runtime.terminate({ abort: true });
+    });
+
+    it("retries compaction when resume failure is reported via result message errors", async () => {
+      sdkMockState.streams.push(
+        // Stream 1: initial message to set session ID
+        [
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "stale-result-session",
+            usage: undefined,
+            modelUsage: {}
+          }
+        ],
+        // Stream 2: compaction attempt 1 — non-success result with resume failure in errors array
+        [
+          {
+            type: "result",
+            subtype: "error_during_execution",
+            session_id: "stale-result-session",
+            errors: ["No conversation found with session ID stale-result-session"],
+            usage: undefined,
+            modelUsage: {}
+          }
+        ],
+        // Stream 3: compaction attempt 2 — succeeds without resume
+        [
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "recovered-session",
+            usage: { input_tokens: 500, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+            modelUsage: { "claude-opus-4-6": { contextWindow: 200_000 } }
+          }
+        ]
+      );
+
+      const rootDir = await createRuntimeRootDir();
+      const authFile = join(rootDir, "auth", "auth.json");
+
+      setAuthCredential(authFile, "claude-agent-sdk", {
+        type: "oauth",
+        access: "claude-oauth-token",
+        refresh: "",
+        expires: String(Date.now() + 60_000)
+      } as unknown as AuthCredential);
+
+      const runtime = await ClaudeAgentSdkRuntime.create({
+        descriptor: createDescriptor(rootDir),
+        callbacks: { onStatusChange: async () => {} },
+        systemPrompt: "You are a worker",
+        tools: [],
+        authFile
+      });
+
+      await runtime.sendMessage("setup");
+      await waitFor(() => runtime.getStatus() === "idle");
+
+      await runtime.compact();
+
+      expect(sdkMockState.queryCalls).toHaveLength(3);
+      expect(sdkMockState.queryCalls[1]?.options?.resume).toBe("stale-result-session");
+      expect(sdkMockState.queryCalls[2]?.options?.resume).toBeUndefined();
+
+      await runtime.terminate({ abort: true });
+    });
   });
 });

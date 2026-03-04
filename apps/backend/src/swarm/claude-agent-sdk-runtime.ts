@@ -9,9 +9,11 @@ import {
   type Query,
   type SDKAssistantMessage,
   type SDKAssistantMessageError,
+  type SDKCompactBoundaryMessage,
   type SDKMessage,
   type SDKResultError,
-  type SDKResultMessage
+  type SDKResultMessage,
+  type SDKStatusMessage
 } from "@anthropic-ai/claude-agent-sdk";
 import { refreshAnthropicToken } from "@mariozechner/pi-ai/dist/utils/oauth/anthropic.js";
 import { AuthStorage, SessionManager, type AuthCredential, type ToolDefinition } from "@mariozechner/pi-coding-agent";
@@ -140,6 +142,7 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
   private readonly fallbackSettingsDeliveryIds = new Set<string>();
   private isTerminating = false;
   private isStopping = false;
+  private isCompacting = false;
   private sessionId: string | undefined;
 
   private constructor(options: {
@@ -314,9 +317,124 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
     this.isStopping = false;
   }
 
-  async compact(): Promise<unknown> {
+  async compact(customInstructions?: string): Promise<unknown> {
     this.ensureNotTerminated();
-    throw new Error(`Agent ${this.descriptor.agentId} does not support manual compaction`);
+
+    if (this.isBusy()) {
+      throw new Error(`Agent ${this.descriptor.agentId} cannot compact while busy (status: ${this.status})`);
+    }
+
+    if (this.isCompacting) {
+      throw new Error(`Agent ${this.descriptor.agentId} is already compacting`);
+    }
+
+    this.isCompacting = true;
+
+    try {
+      return await this.executeCompactionWithResumeRecovery(customInstructions);
+    } catch (error) {
+      this.logRuntimeError("compaction", error, {
+        customInstructionsPreview: previewText(customInstructions ?? "", 240)
+      });
+      throw error;
+    } finally {
+      this.isCompacting = false;
+      if (this.pendingDeliveries.length > 0) {
+        this.startProcessingLoopIfNeeded();
+      }
+    }
+  }
+
+  private async executeCompactionWithResumeRecovery(customInstructions?: string): Promise<unknown> {
+    try {
+      return await this.executeCompaction(customInstructions);
+    } catch (error) {
+      if (this.sessionId && this.isResumeFailureMessage(errorToMessage(error))) {
+        this.clearPersistedRuntimeState();
+        return await this.executeCompaction(customInstructions);
+      }
+      throw error;
+    }
+  }
+
+  private async executeCompaction(customInstructions?: string): Promise<unknown> {
+    const auth = await this.resolveAuthToken();
+    const compactPrompt = customInstructions ? `/compact ${customInstructions}` : "/compact";
+
+    let settingSources = [...this.settingsPolicy.primarySources];
+    try {
+      this.validateProjectSettingsReadableOrThrow(settingSources);
+    } catch (error) {
+      if (
+        this.settingsPolicy.enableFallbackOnReadError &&
+        this.settingsPolicy.fallbackSources.length > 0
+      ) {
+        settingSources = [...this.settingsPolicy.fallbackSources];
+      } else {
+        throw error;
+      }
+    }
+
+    const abortController = new AbortController();
+    const attemptedResumeId = this.sessionId;
+    const requestedReasoning = this.resolveRequestedReasoningConfig();
+    const effectiveReasoning = this.resolveEffectiveReasoningConfig(requestedReasoning);
+
+    this.currentAbortController = abortController;
+    const stderrChunks: string[] = [];
+
+    const compactQuery = this.createClaudeQuery({
+      prompt: compactPrompt,
+      settingSources,
+      auth,
+      abortController,
+      attemptedResumeId,
+      reasoning: effectiveReasoning,
+      onStderr: (trimmed) => {
+        if (stderrChunks.length < 5) {
+          stderrChunks.push(trimmed);
+        }
+      }
+    });
+
+    this.currentQuery = compactQuery;
+
+    let resultMessage: SDKResultMessage | undefined;
+
+    try {
+      for await (const sdkMessage of compactQuery) {
+        this.captureSessionId((sdkMessage as { session_id?: unknown }).session_id);
+
+        if (sdkMessage.type === "result") {
+          resultMessage = sdkMessage;
+          this.updateContextUsageFromResult(sdkMessage);
+          continue;
+        }
+
+        if (sdkMessage.type === "system") {
+          await this.handleSystemMessage(sdkMessage);
+          continue;
+        }
+      }
+    } finally {
+      compactQuery.close();
+      this.currentQuery = undefined;
+      this.currentAbortController = undefined;
+    }
+
+    await this.emitStatus();
+
+    if (!resultMessage) {
+      throw new Error("Compaction completed without a result message");
+    }
+
+    if (resultMessage.subtype !== "success") {
+      const resultErrorMessage = summarizeResultError(toResultError(resultMessage));
+      const stderrSummary = summarizeSdkStderr(stderrChunks);
+      throw new Error(resultErrorMessage || stderrSummary || `Compaction failed with result: ${resultMessage.subtype}`);
+    }
+
+    return { postTokens: this.contextUsage?.tokens };
   }
 
   async getClaudeOutputStyleMetadata(): Promise<{
@@ -394,11 +512,11 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
   }
 
   private isBusy(): boolean {
-    return this.currentQuery !== undefined || this.processingLoop !== undefined;
+    return this.currentQuery !== undefined || this.processingLoop !== undefined || this.isCompacting;
   }
 
   private startProcessingLoopIfNeeded(): void {
-    if (this.processingLoop) {
+    if (this.processingLoop || this.isCompacting) {
       return;
     }
 
@@ -617,6 +735,11 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
           resultMessageCount += 1;
           resultMessage = sdkMessage;
           this.updateContextUsageFromResult(sdkMessage);
+          continue;
+        }
+
+        if (sdkMessage.type === "system") {
+          await this.handleSystemMessage(sdkMessage);
           continue;
         }
       }
@@ -1236,6 +1359,26 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
     ];
 
     return authFailurePatterns.some((pattern) => pattern.test(normalized));
+  }
+
+  private async handleSystemMessage(sdkMessage: SDKMessage & { type: "system" }): Promise<void> {
+    const message = sdkMessage as SDKStatusMessage | SDKCompactBoundaryMessage;
+
+    if (message.subtype === "status" && (message as SDKStatusMessage).status === "compacting") {
+      await this.callbacks.onSessionEvent?.(this.descriptor.agentId, {
+        type: "auto_compaction_start"
+      });
+      return;
+    }
+
+    if (message.subtype === "compact_boundary") {
+      await this.callbacks.onSessionEvent?.(this.descriptor.agentId, {
+        type: "auto_compaction_end"
+      });
+      return;
+    }
+
+    // Other system subtypes (init, etc.) — silently ignore.
   }
 
   private async emitAssistantMessageEvents(message: SDKAssistantMessage): Promise<void> {

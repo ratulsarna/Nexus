@@ -222,7 +222,9 @@ async function handleCompactAgentHttpRequest(
         ? 404
         : message.includes("not running") ||
             message.includes("does not support") ||
-            message.includes("only supported")
+            message.includes("only supported") ||
+            message.includes("cannot compact while busy") ||
+            message.includes("already compacting")
           ? 409
           : message.includes("Invalid") || message.includes("Missing")
             ? 400
