@@ -1187,7 +1187,7 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
       throw new Error(`Target agent is not running: ${agentId}`);
     }
 
-    if (descriptor.role !== "manager") {
+    if (descriptor.role !== "manager" && !isClaudeAgentSdkProvider(descriptor.model.provider)) {
       throw new Error(`Compaction is only supported for manager agents: ${agentId}`);
     }
 
@@ -1207,7 +1207,9 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
       type: "conversation_message",
       agentId,
       role: "system",
-      text: "Compacting manager context...",
+      text: descriptor.role === "manager"
+        ? "Compacting manager context..."
+        : `Compacting ${descriptor.displayName ?? "agent"} context...`,
       timestamp: this.now(),
       source: "system",
       sourceContext
