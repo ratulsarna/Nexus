@@ -70,8 +70,17 @@ Default production ports:
 ```bash
 pnpm build
 pnpm test
-pnpm exec tsc --noEmit
+pnpm --filter @nexus/backend exec tsc --noEmit -p tsconfig.build.json
+pnpm --filter @nexus/ui exec tsc --noEmit -p tsconfig.json
 ```
+
+## Repo Workflow Quirks (Do This, Skip Dead Ends)
+
+- `pnpm prod:start` does not build. It runs `apps/backend/dist/index.js` directly.
+- `pnpm prod` does build + start.
+- `pnpm prod:daemon` starts the daemon once; rerunning it does not restart an already running child.
+- After code changes, use `pnpm prod:restart` to force a fresh `pnpm prod` cycle in daemon mode.
+- For ad-hoc Node scripts that import backend-only deps (for example `@anthropic-ai/claude-agent-sdk`), run them from `apps/backend` so module resolution works.
 
 ## Shadcn UI
 
@@ -103,5 +112,6 @@ Currently installed: badge, button, card, checkbox, context-menu, dialog, input,
 3. Prefer working within existing backend/frontend boundaries instead of introducing broad architectural churn.
 4. Validate changes with UI smoke checks (manager creation, chat send/stop, settings updates).
 5. Before finishing any task, run a full TypeScript typecheck and fix reported errors:
-   - `pnpm exec tsc --noEmit`
+   - `pnpm --filter @nexus/backend exec tsc --noEmit -p tsconfig.build.json`
+   - `pnpm --filter @nexus/ui exec tsc --noEmit -p tsconfig.json`
 6. Prefer shadcn/ui components over hand-rolled HTML for UI controls and surfaces.
