@@ -1,4 +1,5 @@
 export * from './attachments.js'
 export * from './client-commands.js'
+export * from './manager-model-catalog.js'
 export * from './server-events.js'
 export * from './shared-types.js'

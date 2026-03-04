@@ -690,6 +690,106 @@ describe('SwarmWebSocketServer P0 endpoints', () => {
     }
   })
 
+  it('serves manager model catalog endpoint and validates methods', async () => {
+    const config = await makeTempConfig({ managerId: 'manager' })
+    const manager = new FakeSwarmManager(config, [createManagerDescriptor(config.paths.rootDir, 'manager')])
+    const server = new SwarmWebSocketServer({
+      swarmManager: manager as unknown as never,
+      host: config.host,
+      port: config.port,
+      allowNonManagerSubscriptions: false,
+    })
+
+    await server.start()
+
+    try {
+      const catalogResponse = await fetch(`http://${config.host}:${config.port}/api/models/manager-catalog`)
+      const catalog = await parseJsonResponse(catalogResponse)
+      expect(catalog.status).toBe(200)
+
+      const providers = Array.isArray(catalog.json.providers) ? catalog.json.providers : []
+      expect(providers.length).toBeGreaterThanOrEqual(4)
+
+      const providerIds = providers
+        .map((entry) =>
+          typeof entry === 'object' && entry !== null && typeof (entry as { provider?: unknown }).provider === 'string'
+            ? (entry as { provider: string }).provider
+            : undefined,
+        )
+        .filter((value): value is string => typeof value === 'string')
+      expect(providerIds).toEqual(
+        expect.arrayContaining(['openai-codex', 'anthropic', 'claude-agent-sdk', 'openai-codex-app-server']),
+      )
+
+      const optionsResponse = await fetch(`http://${config.host}:${config.port}/api/models/manager-catalog`, {
+        method: 'OPTIONS',
+      })
+      expect(optionsResponse.status).toBe(204)
+
+      const invalidMethodResponse = await fetch(`http://${config.host}:${config.port}/api/models/manager-catalog`, {
+        method: 'POST',
+      })
+      const invalidMethod = await parseJsonResponse(invalidMethodResponse)
+      expect(invalidMethod.status).toBe(405)
+      expect(invalidMethod.json.error).toBe('Method Not Allowed')
+    } finally {
+      await server.stop()
+    }
+  })
+
+  it('returns codex fallback model catalog with warning when codex probe fails', async () => {
+    const previousCodexBin = process.env.CODEX_BIN
+    process.env.CODEX_BIN = '/definitely/missing/codex-binary'
+
+    const config = await makeTempConfig({ managerId: 'manager' })
+    const manager = new FakeSwarmManager(config, [createManagerDescriptor(config.paths.rootDir, 'manager')])
+    const server = new SwarmWebSocketServer({
+      swarmManager: manager as unknown as never,
+      host: config.host,
+      port: config.port,
+      allowNonManagerSubscriptions: false,
+    })
+
+    await server.start()
+
+    try {
+      const catalogResponse = await fetch(`http://${config.host}:${config.port}/api/models/manager-catalog`)
+      const catalog = await parseJsonResponse(catalogResponse)
+      expect(catalog.status).toBe(200)
+
+      const warnings = Array.isArray(catalog.json.warnings) ? catalog.json.warnings : []
+      expect(warnings.join(' ')).toContain('Codex model probe failed')
+
+      const providers = Array.isArray(catalog.json.providers) ? catalog.json.providers : []
+      const codexProvider = providers.find(
+        (entry) =>
+          typeof entry === 'object' &&
+          entry !== null &&
+          (entry as { provider?: unknown }).provider === 'openai-codex-app-server',
+      ) as { models?: unknown } | undefined
+      expect(codexProvider).toBeDefined()
+
+      const codexModels = Array.isArray(codexProvider?.models) ? codexProvider.models : []
+      const fallbackModel = codexModels.find(
+        (entry) =>
+          typeof entry === 'object' &&
+          entry !== null &&
+          (entry as { modelId?: unknown }).modelId === 'default',
+      ) as { allowedThinkingLevels?: unknown; defaultThinkingLevel?: unknown } | undefined
+
+      expect(fallbackModel).toBeDefined()
+      expect(fallbackModel?.defaultThinkingLevel).toBe('xhigh')
+      expect(Array.isArray(fallbackModel?.allowedThinkingLevels)).toBe(true)
+    } finally {
+      await server.stop()
+      if (previousCodexBin === undefined) {
+        delete process.env.CODEX_BIN
+      } else {
+        process.env.CODEX_BIN = previousCodexBin
+      }
+    }
+  })
+
   it('does not expose legacy Slack integration routes', async () => {
     const config = await makeTempConfig({ managerId: undefined })
     const manager = new FakeSwarmManager(config, [])

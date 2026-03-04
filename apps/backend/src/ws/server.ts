@@ -10,6 +10,7 @@ import { createFileRoutes } from "./routes/file-routes.js";
 import { createHealthRoutes } from "./routes/health-routes.js";
 import type { HttpRoute } from "./routes/http-route.js";
 import { createIntegrationRoutes } from "./routes/integration-routes.js";
+import { createModelCatalogRoutes } from "./routes/model-catalog-routes.js";
 import { createSchedulerRoutes } from "./routes/scheduler-routes.js";
 import { createSettingsRoutes, type SettingsRouteBundle } from "./routes/settings-routes.js";
 import { createTranscriptionRoutes } from "./routes/transcription-routes.js";
@@ -96,6 +97,7 @@ export class SwarmWebSocketServer {
       ...createHealthRoutes({
         resolveRepoRoot: () => this.swarmManager.getConfig().paths.rootDir
       }),
+      ...createModelCatalogRoutes(),
       ...createFileRoutes({ swarmManager: this.swarmManager }),
       ...createTranscriptionRoutes({ swarmManager: this.swarmManager }),
       ...createSchedulerRoutes({ swarmManager: this.swarmManager }),
