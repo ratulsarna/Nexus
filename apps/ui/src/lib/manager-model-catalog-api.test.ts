@@ -157,4 +157,17 @@ describe('manager-model-catalog-api', () => {
       'Invalid manager model catalog response.',
     )
   })
+
+  it('preserves plain-text non-JSON API error bodies', async () => {
+    ;(globalThis as { fetch?: typeof fetch }).fetch = vi.fn(async () => {
+      return new Response(
+        'upstream gateway timeout while reading catalog',
+        { status: 502, headers: { 'content-type': 'text/plain' } },
+      )
+    }) as unknown as typeof fetch
+
+    await expect(fetchManagerModelCatalog('ws://127.0.0.1:47187')).rejects.toThrow(
+      'upstream gateway timeout while reading catalog',
+    )
+  })
 })

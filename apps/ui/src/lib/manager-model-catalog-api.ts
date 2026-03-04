@@ -342,25 +342,23 @@ function normalizeOptionalString(value: unknown): string | undefined {
 }
 
 async function readApiError(response: Response): Promise<string> {
-  try {
-    const payload = (await response.json()) as { error?: unknown; message?: unknown }
-    if (typeof payload.error === 'string' && payload.error.trim()) {
-      return payload.error
-    }
-    if (typeof payload.message === 'string' && payload.message.trim()) {
-      return payload.message
-    }
-  } catch {
-    // Ignore JSON parsing errors and fall back to text/status.
-  }
+  const bodyText = await response.text().catch(() => '')
+  const trimmedBodyText = bodyText.trim()
 
-  try {
-    const bodyText = await response.text()
-    if (bodyText.trim().length > 0) {
-      return bodyText
+  if (trimmedBodyText.length > 0) {
+    try {
+      const payload = JSON.parse(trimmedBodyText) as { error?: unknown; message?: unknown }
+      if (typeof payload.error === 'string' && payload.error.trim()) {
+        return payload.error
+      }
+      if (typeof payload.message === 'string' && payload.message.trim()) {
+        return payload.message
+      }
+    } catch {
+      // Keep plain-text error body as-is.
     }
-  } catch {
-    // Ignore text parsing errors and fall back to status.
+
+    return trimmedBodyText
   }
 
   return `Request failed (${response.status})`
