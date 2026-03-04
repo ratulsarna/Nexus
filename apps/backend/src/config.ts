@@ -14,7 +14,9 @@ import type {
 
 export function createConfig(): SwarmConfig {
   const rootDir = detectRootDir();
-  const dataDir = resolve(homedir(), ".nexus");
+  const dataDir = process.env.NEXUS_DATA_DIR
+    ? resolve(process.env.NEXUS_DATA_DIR)
+    : resolve(homedir(), ".nexus");
   const managerId = undefined;
   const swarmDir = resolve(dataDir, "swarm");
   const sessionsDir = resolve(dataDir, "sessions");

@@ -11,8 +11,8 @@
     "packages/protocol"
   ],
   "scripts": {
-    "dev": "concurrently --kill-others-on-fail --names backend,ui \"pnpm --filter @nexus/backend dev\" \"pnpm --filter @nexus/ui dev -- --host ${NEXUS_HOST:-$(node --env-file-if-exists=.env -p 'process.env.NEXUS_HOST || \"127.0.0.1\"' 2>/dev/null)}\"",
-    "dev:backend": "pnpm --filter @nexus/backend dev",
+    "dev": "NEXUS_DATA_DIR=~/.nexus-dev concurrently --kill-others-on-fail --names backend,ui \"pnpm --filter @nexus/backend dev\" \"pnpm --filter @nexus/ui dev -- --host ${NEXUS_HOST:-$(node --env-file-if-exists=.env -p 'process.env.NEXUS_HOST || \"127.0.0.1\"' 2>/dev/null)}\"",
+    "dev:backend": "NEXUS_DATA_DIR=~/.nexus-dev pnpm --filter @nexus/backend dev",
     "dev:ui": "pnpm --filter @nexus/ui dev -- --host ${NEXUS_HOST:-$(node --env-file-if-exists=.env -p 'process.env.NEXUS_HOST || \"127.0.0.1\"' 2>/dev/null)}",
     "dev:site": "pnpm --filter @nexus/site dev",
     "build": "pnpm --filter @nexus/protocol build && pnpm --filter @nexus/backend build && pnpm --filter @nexus/ui build && pnpm --filter @nexus/site build",
