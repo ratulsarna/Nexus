@@ -1889,7 +1889,7 @@ describe('SwarmWebSocketServer', () => {
     )
     expect(explicitUpdated.type).toBe('manager_updated')
     if (explicitUpdated.type === 'manager_updated') {
-      expect(explicitUpdated.resetApplied).toBe(true)
+      expect(explicitUpdated.resetApplied).toBe(false)
       expect(explicitUpdated.manager.model).toEqual({
         provider: 'claude-agent-sdk',
         modelId: 'claude-sonnet-4-5',
