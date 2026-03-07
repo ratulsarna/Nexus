@@ -424,9 +424,9 @@ describe('IndexPage create manager model selection', () => {
           actorAgentId: 'manager',
           timestamp: new Date().toISOString(),
           kind: 'tool_execution_start',
-          toolName: 'speak_to_user',
+          toolName: 'spawn_agent',
           toolCallId: 'manager-call',
-          text: '{"text":"hello"}',
+          text: '{"agentId":"worker-1","task":"analyze"}',
         },
         {
           type: 'agent_tool_call',

@@ -2524,4 +2524,158 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
       await runtime.terminate({ abort: true });
     });
   });
+
+  describe("tool_use block extraction", () => {
+    it("emits tool_execution_start for tool_use blocks in assistant messages", async () => {
+      sdkMockState.streams.push([
+        {
+          type: "assistant",
+          session_id: "session-tool",
+          message: {
+            content: [
+              { type: "tool_use", id: "toolu_abc", name: "bash", input: { command: "ls" } },
+              { type: "tool_use", id: "toolu_def", name: "read", input: { path: "README.md" } }
+            ]
+          }
+        },
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "session-tool",
+          usage: undefined,
+          modelUsage: {}
+        }
+      ]);
+
+      const rootDir = await createRuntimeRootDir();
+      const authFile = join(rootDir, "auth", "auth.json");
+
+      setAuthCredential(authFile, "claude-agent-sdk", {
+        type: "oauth",
+        access: "claude-oauth-token",
+        refresh: "",
+        expires: String(Date.now() + 60_000)
+      } as unknown as AuthCredential);
+
+      const sessionEvents: RuntimeSessionEvent[] = [];
+
+      const runtime = await ClaudeAgentSdkRuntime.create({
+        descriptor: createDescriptor(rootDir),
+        callbacks: {
+          onStatusChange: async () => {},
+          onSessionEvent: async (_agentId, event) => {
+            sessionEvents.push(event);
+          }
+        },
+        systemPrompt: "You are a worker",
+        tools: [],
+        authFile
+      });
+
+      await runtime.sendMessage("use tools");
+      await waitFor(() => runtime.getStatus() === "idle");
+
+      const toolStarts = sessionEvents.filter(
+        (e) => e.type === "tool_execution_start"
+      );
+
+      expect(toolStarts).toHaveLength(2);
+      expect(toolStarts[0]).toMatchObject({
+        type: "tool_execution_start",
+        toolName: "bash",
+        toolCallId: "toolu_abc"
+      });
+      expect(toolStarts[1]).toMatchObject({
+        type: "tool_execution_start",
+        toolName: "read",
+        toolCallId: "toolu_def"
+      });
+
+      // completeActiveToolCalls fires in finally block, emitting tool_execution_end
+      const toolEnds = sessionEvents.filter(
+        (e) => e.type === "tool_execution_end"
+      );
+      expect(toolEnds).toHaveLength(2);
+
+      await runtime.terminate({ abort: true });
+    });
+
+    it("completes active tool calls when the next assistant message arrives", async () => {
+      sdkMockState.streams.push([
+        {
+          type: "assistant",
+          session_id: "session-multi",
+          message: {
+            content: [
+              { type: "tool_use", id: "toolu_first", name: "bash", input: { command: "echo hi" } }
+            ]
+          }
+        },
+        {
+          type: "assistant",
+          session_id: "session-multi",
+          message: {
+            content: [{ type: "text", text: "Done." }]
+          }
+        },
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "session-multi",
+          usage: undefined,
+          modelUsage: {}
+        }
+      ]);
+
+      const rootDir = await createRuntimeRootDir();
+      const authFile = join(rootDir, "auth", "auth.json");
+
+      setAuthCredential(authFile, "claude-agent-sdk", {
+        type: "oauth",
+        access: "claude-oauth-token",
+        refresh: "",
+        expires: String(Date.now() + 60_000)
+      } as unknown as AuthCredential);
+
+      const sessionEvents: RuntimeSessionEvent[] = [];
+
+      const runtime = await ClaudeAgentSdkRuntime.create({
+        descriptor: createDescriptor(rootDir),
+        callbacks: {
+          onStatusChange: async () => {},
+          onSessionEvent: async (_agentId, event) => {
+            sessionEvents.push(event);
+          }
+        },
+        systemPrompt: "You are a worker",
+        tools: [],
+        authFile
+      });
+
+      await runtime.sendMessage("multi-turn");
+      await waitFor(() => runtime.getStatus() === "idle");
+
+      const toolStart = sessionEvents.find((e) => e.type === "tool_execution_start");
+      const toolEnd = sessionEvents.find((e) => e.type === "tool_execution_end");
+
+      expect(toolStart).toMatchObject({
+        toolName: "bash",
+        toolCallId: "toolu_first"
+      });
+
+      expect(toolEnd).toMatchObject({
+        toolName: "bash",
+        toolCallId: "toolu_first"
+      });
+
+      // tool_execution_end must come before the second message_start
+      const endIndex = sessionEvents.indexOf(toolEnd!);
+      const secondMessageStart = sessionEvents.findIndex(
+        (e, i) => i > 0 && e.type === "message_start" && sessionEvents.slice(0, i).some((p) => p.type === "tool_execution_start")
+      );
+      expect(endIndex).toBeLessThan(secondMessageStart);
+
+      await runtime.terminate({ abort: true });
+    });
+  });
 });

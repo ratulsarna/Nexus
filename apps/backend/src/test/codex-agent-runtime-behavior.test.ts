@@ -960,4 +960,59 @@ describe('CodexAgentRuntime behavior', () => {
     expect(modelListCalls).toBe(2)
     await runtime.terminate({ abort: false })
   })
+
+  it('emits tool_execution_start and tool_execution_end for item/tool/call requests', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'swarm-codex-runtime-'))
+    const descriptor = makeDescriptor(tempDir)
+    await mkdir(dirname(descriptor.sessionFile), { recursive: true })
+
+    rpcMockState.requestImpl.mockImplementation(async (_client: any, method: string) => {
+      if (method === 'initialize') return {}
+      if (method === 'account/read') return { requiresOpenaiAuth: false, account: { id: 'acct-1' } }
+      if (method === 'thread/start') return { thread: { id: 'thread-1' } }
+      return {}
+    })
+
+    const sessionEvents: RuntimeSessionEvent[] = []
+
+    const runtime = await CodexAgentRuntime.create({
+      descriptor,
+      callbacks: {
+        onStatusChange: async () => {},
+        onSessionEvent: async (_agentId, event) => {
+          sessionEvents.push(event)
+        },
+      },
+      systemPrompt: 'You are a test codex runtime.',
+      tools: [],
+    })
+
+    const instance = rpcMockState.instances[0]
+
+    // Invoke the server request handler directly (simulates Codex calling a dynamic tool)
+    const result = await instance.options.onRequest?.({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'item/tool/call',
+      params: { tool: 'spawn_agent', callId: 'call-99', arguments: { task: 'analyze' } },
+    })
+
+    // With tools: [], the bridge returns "Unknown tool" — that's fine, we're testing event emission
+    expect(result).toBeDefined()
+
+    const toolEvents = sessionEvents.filter(
+      (e): e is Extract<RuntimeSessionEvent, { type: 'tool_execution_start' | 'tool_execution_end' }> =>
+        e.type === 'tool_execution_start' || e.type === 'tool_execution_end',
+    )
+
+    expect(toolEvents).toHaveLength(2)
+    expect(toolEvents[0].type).toBe('tool_execution_start')
+    expect(toolEvents[0].toolName).toBe('spawn_agent')
+    expect(toolEvents[0].toolCallId).toBe('call-99')
+    expect(toolEvents[1].type).toBe('tool_execution_end')
+    expect(toolEvents[1].toolName).toBe('spawn_agent')
+    expect(toolEvents[1].toolCallId).toBe('call-99')
+
+    await runtime.terminate({ abort: false })
+  })
 })

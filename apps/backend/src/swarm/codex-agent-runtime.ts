@@ -883,10 +883,40 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
         const tool = typeof params?.tool === "string" ? params.tool : "";
         const callId = typeof params?.callId === "string" ? params.callId : "tool-call";
 
-        const response: CodexDynamicToolCallResponse = await this.toolBridge.handleToolCall({
-          tool,
-          callId,
-          arguments: params?.arguments
+        await this.emitSessionEvent({
+          type: "tool_execution_start",
+          toolName: tool,
+          toolCallId: callId,
+          args: params?.arguments
+        });
+
+        let response: CodexDynamicToolCallResponse;
+        let isError = false;
+        try {
+          response = await this.toolBridge.handleToolCall({
+            tool,
+            callId,
+            arguments: params?.arguments
+          });
+        } catch (error) {
+          isError = true;
+          const message = error instanceof Error ? error.message : String(error);
+          response = {
+            success: false,
+            contentItems: [{ type: "inputText", text: `Tool ${tool} failed: ${message}` }]
+          };
+        }
+
+        if (!response.success) {
+          isError = true;
+        }
+
+        await this.emitSessionEvent({
+          type: "tool_execution_end",
+          toolName: tool,
+          toolCallId: callId,
+          result: response,
+          isError
         });
 
         return response;
