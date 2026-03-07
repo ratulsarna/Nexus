@@ -395,6 +395,12 @@ describe('SwarmManager', () => {
     expect(managerPrompt).toContain('You are a PM/EM (product-engineering manager) in a multi-agent swarm.')
     expect(managerPrompt).toContain('End users only see two things')
     expect(managerPrompt).toContain('prefixed with "SYSTEM:"')
+    expect(managerPrompt).toContain(
+      'Delegation/subagent work MUST stay inside the Nexus swarm. The only allowed delegation primitives are `spawn_agent` and `send_message_to_agent`.',
+    )
+    expect(managerPrompt).toContain(
+      'All delegation/subagent work must stay inside the Nexus swarm. Use only `spawn_agent` to create workers and `send_message_to_agent` to route or coordinate with existing Nexus agents.',
+    )
 
     const worker = await manager.spawnAgent('manager', { agentId: 'Prompt Worker' })
     const workerPrompt = manager.systemPromptByAgentId.get(worker.agentId)
@@ -2307,6 +2313,9 @@ describe('SwarmManager', () => {
     expect(overrideSystemPrompt).toContain('User-facing output MUST go through speak_to_user.')
     expect(overrideSystemPrompt).toContain(
       'Use speak_to_user for every user-facing message; for non-web replies, explicitly set target.channel + target.channelId from the inbound source metadata line.',
+    )
+    expect(overrideSystemPrompt).toContain(
+      'Delegation/subagent work MUST stay inside the Nexus swarm. The only allowed delegation primitives are spawn_agent and send_message_to_agent.',
     )
     expect(overrideSystemPrompt).toContain(promptOverride)
 

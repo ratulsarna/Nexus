@@ -92,7 +92,7 @@ export function buildSwarmTools(host: SwarmToolHost, descriptor: AgentDescriptor
       name: "send_message_to_agent",
       label: "Send Message To Agent",
       description:
-        "Send a message to another agent by id. Managers can message their own workers or other managers. Returns immediately with a delivery receipt; accepted mode is runtime-dependent.",
+        "Send a message to another Nexus swarm agent by id. Managers can message their own workers or other managers. This is one of the only allowed Nexus delegation primitives and must be used instead of any model-native/internal delegation or subagent tool. Returns immediately with a delivery receipt; accepted mode is runtime-dependent.",
       parameters: Type.Object({
         targetAgentId: Type.String({ description: "Agent id to receive the message." }),
         message: Type.String({ description: "Message text to deliver." }),
@@ -134,7 +134,7 @@ export function buildSwarmTools(host: SwarmToolHost, descriptor: AgentDescriptor
       name: "spawn_agent",
       label: "Spawn Agent",
       description:
-        "Create and start a new worker agent. agentId is required and normalized to lowercase kebab-case; if taken, a numeric suffix (-2, -3, …) is appended. archetypeId, systemPrompt, model, cwd, and initialMessage are optional. model accepts codex-app|claude-agent-sdk. Alternatively, use provider+modelId for explicit model selection (cannot be combined with model). thinkingLevel (off|minimal|low|medium|high|xhigh) requires provider+modelId.",
+        "Create and start a new Nexus swarm worker agent. This is one of the only allowed Nexus delegation primitives and must be used instead of any model-native/internal delegation or subagent tool. agentId is required and normalized to lowercase kebab-case; if taken, a numeric suffix (-2, -3, …) is appended. archetypeId, systemPrompt, model, cwd, and initialMessage are optional. model accepts codex-app|claude-agent-sdk. Alternatively, use provider+modelId for explicit model selection (cannot be combined with model). thinkingLevel (off|minimal|low|medium|high|xhigh) requires provider+modelId.",
       parameters: Type.Object({
         agentId: Type.String({
           description:
