@@ -67,6 +67,7 @@ interface ActiveToolProgress {
 }
 
 interface AuthTokenResolution {
+  mode: "api_key" | "oauth";
   token: string;
   refreshToken?: string;
 }
@@ -1035,32 +1036,43 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
   }
 
   private async resolveAuthToken(): Promise<AuthTokenResolution> {
-    const credential = this.authStorage.get("claude-agent-sdk");
-
-    if (!credential) {
-      throw createAuthRequiredError("Missing claude-agent-sdk credentials.");
+    // Priority 1: Anthropic API key
+    const anthropicCredential = this.authStorage.get("anthropic");
+    if (anthropicCredential && anthropicCredential.type === "api_key") {
+      const apiKey = normalizeToken((anthropicCredential as { key?: unknown }).key);
+      if (apiKey) {
+        return { mode: "api_key", token: apiKey };
+      }
     }
 
-    if (credential.type !== "oauth") {
-      throw createAuthRequiredError("claude-agent-sdk requires OAuth credentials.");
+    // Priority 2: Claude Agent SDK OAuth
+    const oauthCredential = this.authStorage.get("claude-agent-sdk");
+
+    if (!oauthCredential) {
+      throw createAuthRequiredError("No Anthropic API key or Claude Agent SDK OAuth credentials found.");
     }
 
-    const token = extractAuthToken(credential);
+    if (oauthCredential.type !== "oauth") {
+      throw createAuthRequiredError("No Anthropic API key found, and claude-agent-sdk requires OAuth credentials.");
+    }
+
+    const token = extractAuthToken(oauthCredential);
     if (!token) {
-      throw createAuthRequiredError("Missing claude-agent-sdk OAuth access token.");
+      throw createAuthRequiredError("No Anthropic API key found, and missing claude-agent-sdk OAuth access token.");
     }
 
-    const refreshToken = extractRefreshToken(credential);
-    const expiresMs = resolveCredentialExpiryMs(credential);
+    const refreshToken = extractRefreshToken(oauthCredential);
+    const expiresMs = resolveCredentialExpiryMs(oauthCredential);
     if (expiresMs === undefined || expiresMs > Date.now()) {
       return {
+        mode: "oauth",
         token,
         refreshToken
       };
     }
 
     if (!refreshToken) {
-      throw createAuthRequiredError("claude-agent-sdk OAuth token expired.");
+      throw createAuthRequiredError("No Anthropic API key found, and claude-agent-sdk OAuth token expired.");
     }
 
     let refreshedCredential: AuthCredential;
@@ -1068,7 +1080,7 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
       const refreshed = await refreshAnthropicToken(refreshToken);
       const nextRefreshToken = normalizeToken(refreshed.refresh) ?? refreshToken;
       refreshedCredential = {
-        ...(credential as Record<string, unknown>),
+        ...(oauthCredential as Record<string, unknown>),
         type: "oauth",
         access: refreshed.access,
         key: refreshed.access,
@@ -1078,22 +1090,34 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
       this.authStorage.set("claude-agent-sdk", refreshedCredential);
     } catch (error) {
       const reason = errorToMessage(error);
-      throw createAuthRequiredError(`claude-agent-sdk OAuth token expired and refresh failed: ${reason}`);
+      throw createAuthRequiredError(`No Anthropic API key found, and claude-agent-sdk OAuth token refresh failed: ${reason}`);
     }
 
     const refreshedToken = extractAuthToken(refreshedCredential);
     if (!refreshedToken) {
-      throw createAuthRequiredError("Missing claude-agent-sdk OAuth access token.");
+      throw createAuthRequiredError("No Anthropic API key found, and missing claude-agent-sdk OAuth access token after refresh.");
     }
 
     return {
+      mode: "oauth",
       token: refreshedToken,
       refreshToken: extractRefreshToken(refreshedCredential)
     };
   }
 
   private buildRuntimeEnv(auth: AuthTokenResolution): Record<string, string | undefined> {
-    const env: Record<string, string | undefined> = {
+    if (auth.mode === "api_key") {
+      return {
+        ...process.env,
+        ...this.runtimeEnv,
+        ANTHROPIC_API_KEY: auth.token,
+        CLAUDE_CODE_OAUTH_TOKEN: undefined,
+        CLAUDE_CODE_OAUTH_REFRESH_TOKEN: undefined,
+        ANTHROPIC_AUTH_TOKEN: undefined
+      };
+    }
+
+    return {
       ...process.env,
       ...this.runtimeEnv,
       CLAUDE_CODE_OAUTH_TOKEN: auth.token,
@@ -1101,8 +1125,6 @@ export class ClaudeAgentSdkRuntime implements SwarmAgentRuntime {
       ANTHROPIC_API_KEY: undefined,
       ANTHROPIC_AUTH_TOKEN: undefined
     };
-
-    return env;
   }
 
   private createClaudeQuery(options: {
@@ -2094,7 +2116,7 @@ function isResumeRecoveryError(
 
 function buildAuthReconnectMessage(reason: string): string {
   const normalizedReason = reason.trim().length > 0 ? reason.trim() : "Authentication failed.";
-  return `${normalizedReason} Reconnect Claude Agent SDK in Settings and retry.`;
+  return `${normalizedReason} Set an Anthropic API key or reconnect Claude Agent SDK OAuth in Settings and retry.`;
 }
 
 function toResultError(message: SDKResultMessage): SDKResultError {

@@ -81,7 +81,7 @@ describe("ClaudeAgentSdkRuntime auth policy", () => {
         tools: [],
         authFile
       })
-    ).rejects.toThrow("Missing claude-agent-sdk credentials.");
+    ).rejects.toThrow("No Anthropic API key or Claude Agent SDK OAuth credentials found.");
   });
 
   it("rejects api_key credentials for claude-agent-sdk", async () => {
@@ -103,7 +103,7 @@ describe("ClaudeAgentSdkRuntime auth policy", () => {
         tools: [],
         authFile
       })
-    ).rejects.toThrow("claude-agent-sdk requires OAuth credentials.");
+    ).rejects.toThrow("No Anthropic API key found, and claude-agent-sdk requires OAuth credentials.");
   });
 
   it("accepts oauth credentials for claude-agent-sdk", async () => {
@@ -152,7 +152,7 @@ describe("ClaudeAgentSdkRuntime auth policy", () => {
         tools: [],
         authFile
       })
-    ).rejects.toThrow("claude-agent-sdk OAuth token expired.");
+    ).rejects.toThrow("No Anthropic API key found, and claude-agent-sdk OAuth token expired.");
   });
 
   it("refreshes expired oauth credentials for claude-agent-sdk when refresh token is available", async () => {
@@ -264,7 +264,7 @@ describe("ClaudeAgentSdkRuntime auth policy", () => {
         tools: [],
         authFile
       })
-    ).rejects.toThrow("claude-agent-sdk OAuth token expired.");
+    ).rejects.toThrow("No Anthropic API key found, and claude-agent-sdk OAuth token expired.");
   });
 
   it("accepts oauth credentials when expiry is a future numeric unix-seconds timestamp", async () => {
@@ -313,7 +313,7 @@ describe("ClaudeAgentSdkRuntime auth policy", () => {
         tools: [],
         authFile
       })
-    ).rejects.toThrow("claude-agent-sdk OAuth token expired.");
+    ).rejects.toThrow("No Anthropic API key found, and claude-agent-sdk OAuth token expired.");
   });
 
   it("accepts oauth credentials when expiry is a future ISO timestamp", async () => {
@@ -339,6 +339,106 @@ describe("ClaudeAgentSdkRuntime auth policy", () => {
 
     expect(runtime.getStatus()).toBe("idle");
     await runtime.terminate({ abort: true });
+  });
+
+  it("accepts anthropic API key credentials", async () => {
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+
+    setAuthCredential(authFile, "anthropic", {
+      type: "api_key",
+      key: "sk-ant-test-key"
+    } as unknown as AuthCredential);
+
+    const runtime = await ClaudeAgentSdkRuntime.create({
+      descriptor: createDescriptor(rootDir),
+      callbacks: {
+        onStatusChange: async () => {}
+      },
+      systemPrompt: "You are a worker",
+      tools: [],
+      authFile
+    });
+
+    expect(runtime.getStatus()).toBe("idle");
+    await runtime.terminate({ abort: true });
+  });
+
+  it("anthropic API key takes precedence over claude-agent-sdk OAuth", async () => {
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+
+    setAuthCredential(authFile, "anthropic", {
+      type: "api_key",
+      key: "sk-ant-api-key"
+    } as unknown as AuthCredential);
+
+    setAuthCredential(authFile, "claude-agent-sdk", {
+      type: "oauth",
+      access: "claude-oauth-token",
+      refresh: "",
+      expires: String(Date.now() + 60_000)
+    } as unknown as AuthCredential);
+
+    const runtime = await ClaudeAgentSdkRuntime.create({
+      descriptor: createDescriptor(rootDir),
+      callbacks: {
+        onStatusChange: async () => {}
+      },
+      systemPrompt: "You are a worker",
+      tools: [],
+      authFile
+    });
+
+    expect(runtime.getStatus()).toBe("idle");
+    await runtime.terminate({ abort: true });
+  });
+
+  it("ignores empty anthropic API key and falls through to OAuth", async () => {
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+
+    setAuthCredential(authFile, "anthropic", {
+      type: "api_key",
+      key: "   "
+    } as unknown as AuthCredential);
+
+    setAuthCredential(authFile, "claude-agent-sdk", {
+      type: "oauth",
+      access: "claude-oauth-token",
+      refresh: "",
+      expires: String(Date.now() + 60_000)
+    } as unknown as AuthCredential);
+
+    const runtime = await ClaudeAgentSdkRuntime.create({
+      descriptor: createDescriptor(rootDir),
+      callbacks: {
+        onStatusChange: async () => {}
+      },
+      systemPrompt: "You are a worker",
+      tools: [],
+      authFile
+    });
+
+    expect(runtime.getStatus()).toBe("idle");
+    await runtime.terminate({ abort: true });
+  });
+
+  it("rejects when neither anthropic API key nor OAuth are available", async () => {
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+
+    await expect(
+      ClaudeAgentSdkRuntime.create({
+        descriptor: createDescriptor(rootDir),
+        callbacks: {
+          onStatusChange: async () => {}
+        },
+        systemPrompt: "You are a worker",
+        tools: [],
+        authFile
+      })
+    ).rejects.toThrow("No Anthropic API key or Claude Agent SDK OAuth credentials found.");
   });
 
   it("reports followUp when busy instead of steer", async () => {

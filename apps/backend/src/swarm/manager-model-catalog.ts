@@ -335,7 +335,7 @@ function buildClaudeAgentSdkModels(): ManagerModelCatalogModel[] {
       defaultThinkingLevel: "high"
     },
     {
-      modelId: "claude-haiku-4-5-latest",
+      modelId: "claude-haiku-4-5",
       modelLabel: "Claude Haiku 4.5",
       allowedThinkingLevels: [...THINKING_LEVELS],
       defaultThinkingLevel: "medium"

@@ -43,7 +43,7 @@ describe("ManagerModelCatalogService", () => {
         defaultThinkingLevel: "high"
       },
       {
-        modelId: "claude-haiku-4-5-latest",
+        modelId: "claude-haiku-4-5",
         modelLabel: "Claude Haiku 4.5",
         allowedThinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh"],
         defaultThinkingLevel: "medium"

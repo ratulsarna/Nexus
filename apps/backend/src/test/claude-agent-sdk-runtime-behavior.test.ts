@@ -462,6 +462,94 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
     await runtime.terminate({ abort: true });
   });
 
+  it("passes Anthropic API key via env var when set", async () => {
+    sdkMockState.streams.push([
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "session-api-key",
+        usage: undefined,
+        modelUsage: {}
+      }
+    ]);
+
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+
+    setAuthCredential(authFile, "anthropic", {
+      type: "api_key",
+      key: "sk-ant-test-key"
+    } as unknown as AuthCredential);
+
+    const runtime = await ClaudeAgentSdkRuntime.create({
+      descriptor: createDescriptor(rootDir),
+      callbacks: {
+        onStatusChange: async () => {}
+      },
+      systemPrompt: "You are a worker",
+      tools: [],
+      authFile
+    });
+
+    await runtime.sendMessage("check api key env");
+    await waitFor(() => runtime.getPendingCount() === 0 && runtime.getStatus() === "idle");
+
+    const env = sdkMockState.queryCalls[0]?.options?.env as Record<string, string | undefined> | undefined;
+    expect(env?.ANTHROPIC_API_KEY).toBe("sk-ant-test-key");
+    expect(env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(env?.CLAUDE_CODE_OAUTH_REFRESH_TOKEN).toBeUndefined();
+    expect(env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+
+    await runtime.terminate({ abort: true });
+  });
+
+  it("API key takes precedence over OAuth when both are set", async () => {
+    sdkMockState.streams.push([
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "session-precedence",
+        usage: undefined,
+        modelUsage: {}
+      }
+    ]);
+
+    const rootDir = await createRuntimeRootDir();
+    const authFile = join(rootDir, "auth", "auth.json");
+
+    setAuthCredential(authFile, "anthropic", {
+      type: "api_key",
+      key: "sk-ant-api-key"
+    } as unknown as AuthCredential);
+
+    setAuthCredential(authFile, "claude-agent-sdk", {
+      type: "oauth",
+      access: "claude-oauth-token",
+      refresh: "claude-refresh-token",
+      expires: String(Date.now() + 60_000)
+    } as unknown as AuthCredential);
+
+    const runtime = await ClaudeAgentSdkRuntime.create({
+      descriptor: createDescriptor(rootDir),
+      callbacks: {
+        onStatusChange: async () => {}
+      },
+      systemPrompt: "You are a worker",
+      tools: [],
+      authFile
+    });
+
+    await runtime.sendMessage("check precedence");
+    await waitFor(() => runtime.getPendingCount() === 0 && runtime.getStatus() === "idle");
+
+    const env = sdkMockState.queryCalls[0]?.options?.env as Record<string, string | undefined> | undefined;
+    expect(env?.ANTHROPIC_API_KEY).toBe("sk-ant-api-key");
+    expect(env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(env?.CLAUDE_CODE_OAUTH_REFRESH_TOKEN).toBeUndefined();
+
+    await runtime.terminate({ abort: true });
+  });
+
   it("can replace the Claude Code preset with a raw custom system prompt", async () => {
     sdkMockState.streams.push([
       {
@@ -1163,7 +1251,7 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
     await runtime.sendMessage("trigger auth error");
     await waitFor(() => runtimeErrors.length > 0);
 
-    const reconnectText = "Reconnect Claude Agent SDK in Settings and retry.";
+    const reconnectText = "Set an Anthropic API key or reconnect Claude Agent SDK OAuth in Settings and retry.";
     const message = runtimeErrors[runtimeErrors.length - 1]?.message ?? "";
     const occurrences = message.split(reconnectText).length - 1;
     expect(occurrences).toBe(1);
@@ -1232,7 +1320,7 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
     expect(lastError?.details?.retriable).toBe(false);
     expect(lastError?.details?.reconnectRequired).toBe(true);
     expect(lastError?.message).toContain("Your account does not have access to Claude.");
-    expect(lastError?.message).toContain("Reconnect Claude Agent SDK in Settings and retry.");
+    expect(lastError?.message).toContain("Set an Anthropic API key or reconnect Claude Agent SDK OAuth in Settings and retry.");
 
     await runtime.terminate({ abort: true });
   });
@@ -1281,7 +1369,7 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
     const lastError = runtimeErrors[runtimeErrors.length - 1];
     expect(lastError?.details?.retriable).toBe(false);
     expect(lastError?.details?.reconnectRequired).toBe(true);
-    expect(lastError?.message).toContain("Reconnect Claude Agent SDK in Settings and retry.");
+    expect(lastError?.message).toContain("Set an Anthropic API key or reconnect Claude Agent SDK OAuth in Settings and retry.");
 
     await runtime.terminate({ abort: true });
   });
