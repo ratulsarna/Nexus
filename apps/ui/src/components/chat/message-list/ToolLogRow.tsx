@@ -1,4 +1,4 @@
-import { useId, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import {
   AlertCircle,
   Boxes,
@@ -20,6 +20,8 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { formatTimestamp } from './message-row-utils'
 import type { ToolCallCategory } from '@/lib/tool-call-classifier'
+import { extractFileDiffData } from '@/lib/diff-utils'
+import { FileDiffView } from './FileDiffView'
 import type {
   ConversationLogEntry,
   ToolDisplayStatus,
@@ -132,6 +134,15 @@ const TOOL_DETAIL_CONFIG: Record<string, ToolDetailConfig> = {
   file_change: {
     detailKeys: ['path'],
   },
+  apply_patch: {
+    detailKeys: ['patch'],
+    getDetail: (input) => {
+      const patch = pickString(input, ['patch'])
+      if (!patch) return null
+      const match = patch.match(/^---\s+[ab]\/(.+)$/m)
+      return match ? truncate(match[1], 72) : 'Applied patch'
+    },
+  },
   list_agents: {
     detailKeys: ['targetAgentId', 'agentId'],
   },
@@ -192,6 +203,21 @@ function parseJsonRecord(input: string | undefined): Record<string, unknown> {
   } catch {
     return {}
   }
+}
+
+function isBoilerplateResult(payload: string): boolean {
+  try {
+    const parsed = JSON.parse(payload)
+    if (typeof parsed === 'object' && parsed !== null) {
+      const summary = (parsed as Record<string, unknown>).summary
+      if (typeof summary === 'string' && /tool execution completed/i.test(summary)) {
+        return true
+      }
+    }
+  } catch {
+    // not JSON
+  }
+  return false
 }
 
 function formatPayload(value: string): string {
@@ -336,6 +362,11 @@ function ToolExecutionLogRow({ entry }: { entry: ToolExecutionDisplayEntry }) {
           ? 'Error'
           : 'Result'
 
+  const diffData = useMemo(() => {
+    if (entry.classification.category !== 'file' || !entry.inputPayload) return null
+    return extractFileDiffData(entry.toolName, entry.inputPayload)
+  }, [entry.classification.category, entry.toolName, entry.inputPayload])
+
   return (
     <div className="rounded-md">
       <Button
@@ -399,11 +430,13 @@ function ToolExecutionLogRow({ entry }: { entry: ToolExecutionDisplayEntry }) {
       >
         <div className="overflow-hidden">
           <div className="ml-6 mt-1 space-y-2 pb-1">
-            {entry.inputPayload ? (
+            {diffData ? (
+              <FileDiffView data={diffData} />
+            ) : entry.inputPayload ? (
               <ToolPayloadBlock label="Input" value={entry.inputPayload} tone="neutral" />
             ) : null}
 
-            {outputPayload ? (
+            {outputPayload && !(diffData && isBoilerplateResult(outputPayload)) ? (
               <ToolPayloadBlock
                 label={outputLabel}
                 value={outputPayload}
