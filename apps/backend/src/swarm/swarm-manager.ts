@@ -85,14 +85,24 @@ import type {
   ThinkingLevel
 } from "./types.js";
 
-const DEFAULT_WORKER_SYSTEM_PROMPT = `You are a worker agent in a swarm.
-- You can list agents and send messages to other agents.
-- Use coding tools (read/bash/edit/write) to execute implementation tasks.
-- Report progress and outcomes back to the manager using send_message_to_agent.
-- You are not user-facing.
-- End users only see messages they send and manager speak_to_user outputs.
-- Your plain assistant text is not directly visible to end users.
-- Incoming messages prefixed with "SYSTEM:" are internal control/context updates, not direct end-user chat.`;
+function buildWorkerSystemPrompt(managerId: string | undefined): string {
+  const managerLine = managerId
+    ? `Your manager is "${managerId}". To communicate with them (results, questions, clarifications, status updates, or anything else), call the send_message_to_agent tool with targetAgentId="${managerId}". Text output alone does not reach the manager.`
+    : `To communicate with the manager (results, questions, clarifications, status updates, or anything else), call the send_message_to_agent tool. Text output alone does not reach the manager.`;
+
+  return `# Runtime context — you are a WORKER in a multi-agent swarm
+
+You were spawned by a manager agent to carry out a specific task. You are NOT running as a standalone assistant — you are part of a coordinated swarm where a manager delegates work to workers like you.
+
+## How communication works
+- Your text output is visible to the user for transparency, but the user's main conversation is with the manager, not with you directly. Do not talk to the user directly unless the user talks to you.
+- ${managerLine}
+- You can call list_agents to discover other agents in the swarm.
+
+## Messages you receive
+- Messages prefixed with "SYSTEM:" are internal control messages from the swarm runtime.
+- Task instructions come from the manager agent who spawned you.`;
+}
 const MANAGER_ARCHETYPE_ID = "manager";
 const MERGER_ARCHETYPE_ID = "merger";
 const INTERNAL_MODEL_MESSAGE_PREFIX = "SYSTEM: ";
@@ -1889,7 +1899,7 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
       }
     }
 
-    return DEFAULT_WORKER_SYSTEM_PROMPT;
+    return buildWorkerSystemPrompt(descriptor.managerId);
   }
 
   private resolveRequiredArchetypePrompt(archetypeId: string): string {

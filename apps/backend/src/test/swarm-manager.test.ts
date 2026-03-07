@@ -400,8 +400,9 @@ describe('SwarmManager', () => {
     const workerPrompt = manager.systemPromptByAgentId.get(worker.agentId)
 
     expect(workerPrompt).toBeDefined()
-    expect(workerPrompt).toContain('End users only see messages they send and manager speak_to_user outputs.')
-    expect(workerPrompt).toContain('Incoming messages prefixed with "SYSTEM:"')
+    expect(workerPrompt).toContain('call the send_message_to_agent tool')
+    expect(workerPrompt).toContain('SYSTEM:')
+    expect(workerPrompt).toContain('you are a WORKER in a multi-agent swarm')
   })
 
   it('uses repo manager archetype overrides on boot', async () => {
@@ -546,8 +547,8 @@ describe('SwarmManager', () => {
     const config = await makeTempConfig()
     config.defaultModel = {
       provider: 'openai-codex-app-server',
-      modelId: 'default',
-      thinkingLevel: 'xhigh',
+      modelId: 'gpt-5.4',
+      thinkingLevel: 'high',
     }
     const manager = new TestSwarmManager(config)
     await bootWithDefaultManager(manager, config)
@@ -2129,7 +2130,7 @@ describe('SwarmManager', () => {
     expect(updated.resetApplied).toBe(true)
     expect(updated.manager.model).toEqual({
       provider: 'openai-codex-app-server',
-      modelId: 'default',
+      modelId: 'gpt-5.4',
       thinkingLevel: 'low',
     })
     expect(initialRuntime?.terminateCalls).toEqual([{ abort: true }])
@@ -2357,8 +2358,8 @@ describe('SwarmManager', () => {
     const config = await makeTempConfig()
     config.defaultModel = {
       provider: 'openai-codex-app-server',
-      modelId: 'default',
-      thinkingLevel: 'xhigh',
+      modelId: 'gpt-5.4',
+      thinkingLevel: 'high',
     }
     const manager = new TestSwarmManager(config)
     await bootWithDefaultManager(manager, config)
@@ -2366,7 +2367,7 @@ describe('SwarmManager', () => {
     await manager.updateManager('manager', {
       managerId: 'manager',
       spawnDefaultProvider: 'openai-codex-app-server',
-      spawnDefaultModelId: 'default',
+      spawnDefaultModelId: 'gpt-5.4',
       spawnDefaultThinkingLevel: 'low',
     })
 
@@ -2379,7 +2380,7 @@ describe('SwarmManager', () => {
     expect(updated.resetApplied).toBe(true)
     expect(updated.manager.spawnDefaultModel).toEqual({
       provider: 'openai-codex-app-server',
-      modelId: 'default',
+      modelId: 'gpt-5.4',
       thinkingLevel: 'low',
     })
   })
@@ -2515,8 +2516,8 @@ describe('SwarmManager', () => {
 
     expect(codexAppManager.model).toEqual({
       provider: 'openai-codex-app-server',
-      modelId: 'default',
-      thinkingLevel: 'xhigh',
+      modelId: 'gpt-5.4',
+      thinkingLevel: 'high',
     })
     expect(claudeAgentSdkManager.model).toEqual({
       provider: 'claude-agent-sdk',
@@ -2663,8 +2664,8 @@ describe('SwarmManager', () => {
 
     expect(codexAppWorker.model).toEqual({
       provider: 'openai-codex-app-server',
-      modelId: 'default',
-      thinkingLevel: 'xhigh',
+      modelId: 'gpt-5.4',
+      thinkingLevel: 'high',
     })
     expect(claudeAgentSdkWorker.model).toEqual({
       provider: 'claude-agent-sdk',
@@ -2900,8 +2901,8 @@ describe('SwarmManager', () => {
 
     expect(worker.model).toEqual({
       provider: 'openai-codex-app-server',
-      modelId: 'default',
-      thinkingLevel: 'xhigh',
+      modelId: 'gpt-5.4',
+      thinkingLevel: 'high',
     })
   })
 

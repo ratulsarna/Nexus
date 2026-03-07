@@ -105,6 +105,7 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
   private readonly modelCapabilitiesByKey = new Map<string, ModelCapabilities>();
   private modelCapabilitiesLoaded = false;
   private modelCapabilitiesLoadPromise: Promise<void> | undefined;
+  private turnItemCount = 0;
 
   private constructor(options: {
     descriptor: AgentDescriptor;
@@ -158,8 +159,8 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
       onExit: (error) => {
         void this.handleProcessExit(error);
       },
-      onStderr: () => {
-        // Intentionally ignored. Codex emits debug logs on stderr.
+      onStderr: (line) => {
+        this.logRuntimeInfo("stderr", { line });
       }
     });
   }
@@ -667,6 +668,7 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
         }
 
         this.startRequestPending = false;
+        this.turnItemCount = 0;
         await this.emitSessionEvent({ type: "agent_start" });
         await this.emitSessionEvent({ type: "turn_start" });
         await this.updateStatus("streaming");
@@ -675,8 +677,46 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
       }
 
       case "turn/completed": {
+        const completedParams = notification.params as {
+          lastTurnError?: unknown;
+          error?: unknown;
+          status?: unknown;
+          [key: string]: unknown;
+        } | undefined;
+
+        if (completedParams) {
+          const turnError = completedParams.lastTurnError ?? completedParams.error;
+          if (turnError) {
+            this.logRuntimeInfo("turn_completed_error", {
+              error: turnError,
+              status: completedParams.status
+            });
+            await this.reportRuntimeError({
+              phase: "turn_completed",
+              message: typeof turnError === "string"
+                ? turnError
+                : typeof turnError === "object" && turnError !== null && "message" in turnError
+                  ? String((turnError as { message: unknown }).message)
+                  : JSON.stringify(turnError),
+              details: { status: completedParams.status }
+            });
+          }
+        }
+
+        if (this.turnItemCount === 0) {
+          this.logRuntimeInfo("turn_completed_empty", {
+            message: "Turn completed with zero items (no text, no tool calls). The model may have failed silently."
+          });
+          await this.reportRuntimeError({
+            phase: "turn_completed",
+            message: "Worker turn completed with no output. This usually indicates a model error (invalid model, auth failure, or API error). Check codex stderr logs above for details.",
+            details: { turnItemCount: 0 }
+          });
+        }
+
         this.startRequestPending = false;
         this.activeTurnId = undefined;
+        this.turnItemCount = 0;
 
         await this.emitSessionEvent({
           type: "turn_end",
@@ -750,6 +790,10 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
     const item = parseThreadItemFromNotification(params);
     if (!item) {
       return;
+    }
+
+    if (stage === "started" && item.type !== "userMessage") {
+      this.turnItemCount += 1;
     }
 
     if (item.type === "userMessage") {

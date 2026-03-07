@@ -32,8 +32,8 @@ describe("model-presets", () => {
       })
     ).toEqual({
       provider: "openai-codex-app-server",
-      modelId: "default",
-      thinkingLevel: "xhigh"
+      modelId: "gpt-5.4",
+      thinkingLevel: "high"
     });
   });
 

@@ -64,7 +64,8 @@ export interface RuntimeErrorEvent {
     | "interrupt"
     | "thread_resume"
     | "startup"
-    | "runtime_exit";
+    | "runtime_exit"
+    | "turn_completed";
   message: string;
   stack?: string;
   details?: Record<string, unknown>;

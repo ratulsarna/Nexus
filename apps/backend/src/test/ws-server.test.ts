@@ -1592,8 +1592,8 @@ describe('SwarmWebSocketServer', () => {
     if (createdEvent.type === 'manager_created') {
       expect(createdEvent.manager.model).toEqual({
         provider: 'openai-codex-app-server',
-        modelId: 'default',
-        thinkingLevel: 'xhigh',
+        modelId: 'gpt-5.4',
+        thinkingLevel: 'high',
       })
     }
 

@@ -7,8 +7,8 @@ export const DEFAULT_SWARM_MODEL_PRESET_DEFINITIONS: SwarmModelPresetDefinitions
   "codex-app": {
     descriptor: {
       provider: "openai-codex-app-server",
-      modelId: "default",
-      thinkingLevel: "xhigh"
+      modelId: "gpt-5.4",
+      thinkingLevel: "high"
     },
     aliases: [
       { provider: "openai-codex-app-server", modelId: "codex-app" },
