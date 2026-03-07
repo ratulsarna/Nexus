@@ -31,8 +31,6 @@ Opens at [localhost:47188](http://localhost:47188). Create a manager, point it a
 
 **Multi-model teams** — Route tasks to the right model. The manager picks the best fit for each job from Claude Opus, Sonnet, Haiku, or Codex.
 
-**Persistent memory** — Your manager remembers preferences, routing decisions, and project context across sessions. The knowledge compounds over time.
-
 **Full observability** — Every agent's messages, tool calls, and thinking are streamed to the dashboard in real time. You always know exactly what each agent is doing.
 
 **Steer at any time** — Send follow-up instructions, interrupt agents mid-task, or kill workers that go off track. You stay in control without micromanaging.
@@ -48,7 +46,7 @@ Opens at [localhost:47188](http://localhost:47188). Create a manager, point it a
 ## How It Works
 
 1. **Create a manager** — Spin one up for your project. Point it at a repo, pick the models you want it to use.
-2. **Onboard it** — Tell it how you like to work — task breakdown strategy, model routing, coding standards. It remembers everything.
+2. **Configure it** — Pick models, set up integrations, define custom archetypes for specialized roles.
 3. **Let it manage** — Hand off the work. Your manager dispatches coding agents and tracks progress. Watch everything in real time and steer when needed.
 
 ## Development
@@ -65,7 +63,6 @@ pnpm prod           # Build and start production (backend :47287, UI :47289)
 ```
 apps/backend/       Node.js server — agent orchestration, WebSocket, HTTP API
 apps/ui/            React dashboard — chat, settings, artifact viewer
-apps/site/          Landing page
 packages/protocol/  Shared TypeScript types for the wire protocol
 ```
 
