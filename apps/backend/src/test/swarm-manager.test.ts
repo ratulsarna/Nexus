@@ -790,6 +790,45 @@ describe('SwarmManager', () => {
     expect(history).toHaveLength(0)
   })
 
+  it('surfaces manager assistant thinking as a conversation message', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    seedManagerDescriptorForRuntimeEventTests(manager, config)
+
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'I will spawn a worker.' }],
+        thinking: 'The user wants me to analyze the codebase. I should spawn a worker for this.',
+        stopReason: 'stop',
+      },
+    })
+
+    const history = manager.getConversationHistory('manager')
+    const thinkingMessage = history.find(
+      (entry) =>
+        entry.type === 'conversation_message' &&
+        entry.role === 'assistant' &&
+        entry.source === 'system',
+    )
+    expect(thinkingMessage).toBeDefined()
+    if (thinkingMessage?.type === 'conversation_message') {
+      expect(thinkingMessage.text).toBe('')
+      expect(thinkingMessage.thinking).toBe(
+        'The user wants me to analyze the codebase. I should spawn a worker for this.',
+      )
+    }
+
+    const systemError = history.find(
+      (entry) =>
+        entry.type === 'conversation_message' &&
+        entry.role === 'system' &&
+        entry.text.includes('Manager reply failed'),
+    )
+    expect(systemError).toBeUndefined()
+  })
+
   it('handles /compact as a manager slash command without forwarding it as a user prompt', async () => {
     const config = await makeTempConfig()
     const manager = new TestSwarmManager(config)

@@ -119,6 +119,25 @@ export class ConversationProjector {
 
     if (descriptor?.role === "manager") {
       this.captureManagerRuntimeErrorConversationEvent(agentId, event);
+
+      if (event.type === "message_end") {
+        const role = extractRole(event.message);
+        if (role === "assistant") {
+          const thinking = extractMessageThinking(event.message);
+          if (thinking) {
+            this.emitConversationMessage({
+              type: "conversation_message",
+              agentId,
+              role: "assistant",
+              text: "",
+              thinking,
+              timestamp,
+              source: "system"
+            });
+          }
+        }
+      }
+
       return;
     }
 
