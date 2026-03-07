@@ -35,6 +35,18 @@ describe("ManagerModelCatalogService", () => {
         modelLabel: "Claude Opus 4.6",
         allowedThinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh"],
         defaultThinkingLevel: "xhigh"
+      },
+      {
+        modelId: "claude-sonnet-4-6",
+        modelLabel: "Claude Sonnet 4.6",
+        allowedThinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh"],
+        defaultThinkingLevel: "high"
+      },
+      {
+        modelId: "claude-haiku-4-5-latest",
+        modelLabel: "Claude Haiku 4.5",
+        allowedThinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh"],
+        defaultThinkingLevel: "medium"
       }
     ]);
 
