@@ -3190,4 +3190,109 @@ describe('SwarmManager', () => {
       expect(messageText).toContain('coordination request')
     })
   })
+
+  describe('dual-sided agent_message history', () => {
+    it('records agent_message in both manager and worker histories when manager messages worker', async () => {
+      const config = await makeTempConfig()
+      const manager = new TestSwarmManager(config)
+      await bootWithDefaultManager(manager, config)
+
+      const worker = await manager.spawnAgent('manager', { agentId: 'History Worker' })
+      await manager.sendMessage('manager', worker.agentId, 'task for worker')
+
+      const managerHistory = manager.getConversationHistory('manager')
+      const workerHistory = manager.getConversationHistory(worker.agentId)
+
+      const managerEvent = managerHistory.find(
+        (e) => e.type === 'agent_message' && 'fromAgentId' in e && e.fromAgentId === 'manager' && 'toAgentId' in e && e.toAgentId === worker.agentId,
+      )
+      const workerEvent = workerHistory.find(
+        (e) => e.type === 'agent_message' && 'fromAgentId' in e && e.fromAgentId === 'manager' && 'toAgentId' in e && e.toAgentId === worker.agentId,
+      )
+
+      expect(managerEvent).toBeDefined()
+      expect(workerEvent).toBeDefined()
+      expect(managerEvent!.agentId).toBe('manager')
+      expect(workerEvent!.agentId).toBe(worker.agentId)
+    })
+
+    it('records agent_message in both worker and manager histories when worker messages manager', async () => {
+      const config = await makeTempConfig()
+      const manager = new TestSwarmManager(config)
+      await bootWithDefaultManager(manager, config)
+
+      const worker = await manager.spawnAgent('manager', { agentId: 'Reporting Worker' })
+      await manager.sendMessage(worker.agentId, 'manager', 'results ready')
+
+      const managerHistory = manager.getConversationHistory('manager')
+      const workerHistory = manager.getConversationHistory(worker.agentId)
+
+      const managerEvent = managerHistory.find(
+        (e) => e.type === 'agent_message' && 'fromAgentId' in e && e.fromAgentId === worker.agentId,
+      )
+      const workerEvent = workerHistory.find(
+        (e) => e.type === 'agent_message' && 'fromAgentId' in e && e.fromAgentId === worker.agentId,
+      )
+
+      expect(managerEvent).toBeDefined()
+      expect(workerEvent).toBeDefined()
+      expect(managerEvent!.agentId).toBe('manager')
+      expect(workerEvent!.agentId).toBe(worker.agentId)
+    })
+
+    it('does not produce duplicate agent_message in manager history for manager-to-worker sends', async () => {
+      const config = await makeTempConfig()
+      const manager = new TestSwarmManager(config)
+      await bootWithDefaultManager(manager, config)
+
+      const worker = await manager.spawnAgent('manager', { agentId: 'Dedup Worker' })
+      await manager.sendMessage('manager', worker.agentId, 'single delivery')
+
+      const managerHistory = manager.getConversationHistory('manager')
+      const managerEvents = managerHistory.filter(
+        (e) => e.type === 'agent_message' && 'text' in e && e.text === 'single delivery',
+      )
+
+      expect(managerEvents).toHaveLength(1)
+    })
+
+    it('does not emit agent_message events for user-origin worker messages', async () => {
+      const config = await makeTempConfig()
+      const manager = new TestSwarmManager(config)
+      await bootWithDefaultManager(manager, config)
+
+      const worker = await manager.spawnAgent('manager', { agentId: 'User Target Worker' })
+      await manager.handleUserMessage('hello from user', { targetAgentId: worker.agentId })
+
+      const managerHistory = manager.getConversationHistory('manager')
+      const workerHistory = manager.getConversationHistory(worker.agentId)
+
+      expect(managerHistory.filter((e) => e.type === 'agent_message')).toHaveLength(0)
+      expect(workerHistory.filter((e) => e.type === 'agent_message')).toHaveLength(0)
+    })
+
+    it('records agent_message in both histories when spawnAgent sends an initial message', async () => {
+      const config = await makeTempConfig()
+      const manager = new TestSwarmManager(config)
+      await bootWithDefaultManager(manager, config)
+
+      const worker = await manager.spawnAgent('manager', {
+        agentId: 'Init Worker',
+        initialMessage: 'bootstrap task',
+      })
+
+      const managerHistory = manager.getConversationHistory('manager')
+      const workerHistory = manager.getConversationHistory(worker.agentId)
+
+      const managerEvent = managerHistory.find(
+        (e) => e.type === 'agent_message' && 'text' in e && e.text === 'bootstrap task',
+      )
+      const workerEvent = workerHistory.find(
+        (e) => e.type === 'agent_message' && 'text' in e && e.text === 'bootstrap task',
+      )
+
+      expect(managerEvent).toBeDefined()
+      expect(workerEvent).toBeDefined()
+    })
+  })
 })

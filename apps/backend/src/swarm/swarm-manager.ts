@@ -1024,11 +1024,14 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
     });
 
     if (origin !== "user" && fromAgentId !== targetAgentId) {
+      const coveredIds = new Set(managerContextIds);
+      const ts = this.now();
+
       for (const managerContextId of managerContextIds) {
         this.emitAgentMessage({
           type: "agent_message",
           agentId: managerContextId,
-          timestamp: this.now(),
+          timestamp: ts,
           source: "agent_to_agent",
           fromAgentId,
           toAgentId: targetAgentId,
@@ -1037,6 +1040,23 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
           acceptedMode: receipt.acceptedMode,
           attachmentCount: attachments.length > 0 ? attachments.length : undefined
         });
+      }
+
+      for (const participantId of [fromAgentId, targetAgentId]) {
+        if (!coveredIds.has(participantId)) {
+          this.emitAgentMessage({
+            type: "agent_message",
+            agentId: participantId,
+            timestamp: ts,
+            source: "agent_to_agent",
+            fromAgentId,
+            toAgentId: targetAgentId,
+            text: message,
+            requestedDelivery,
+            acceptedMode: receipt.acceptedMode,
+            attachmentCount: attachments.length > 0 ? attachments.length : undefined
+          });
+        }
       }
     }
 
@@ -1396,18 +1416,6 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
         attachmentCount: attachments.length
       });
 
-      this.emitAgentMessage({
-        type: "agent_message",
-        agentId: managerContextId,
-        timestamp: this.now(),
-        source: "user_to_agent",
-        toAgentId: targetAgentId,
-        text: trimmed,
-        sourceContext,
-        requestedDelivery,
-        acceptedMode: receipt.acceptedMode,
-        attachmentCount: attachments.length > 0 ? attachments.length : undefined
-      });
       return;
     }
 
