@@ -477,6 +477,193 @@ describe('CodexAgentRuntime behavior', () => {
     await runtime.terminate({ abort: false })
   })
 
+  it('starts manual codex compaction and resolves when the compaction turn completes', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'swarm-codex-runtime-'))
+    const descriptor = makeDescriptor(tempDir)
+    await mkdir(dirname(descriptor.sessionFile), { recursive: true })
+
+    const statuses: AgentStatus[] = []
+    const runtimeErrors: RuntimeErrorEvent[] = []
+
+    rpcMockState.requestImpl.mockImplementation(async (_client: any, method: string, params: unknown) => {
+      if (method === 'initialize') {
+        return {}
+      }
+
+      if (method === 'account/read') {
+        return { requiresOpenaiAuth: false, account: { id: 'acct-1' } }
+      }
+
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-compact' } }
+      }
+
+      if (method === 'thread/compact/start') {
+        expect(params).toEqual({ threadId: 'thread-compact' })
+        return {}
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const runtime = await CodexAgentRuntime.create({
+      descriptor,
+      callbacks: {
+        onStatusChange: async (_agentId, status) => {
+          statuses.push(status)
+        },
+        onRuntimeError: async (_agentId, error) => {
+          runtimeErrors.push(error)
+        },
+      },
+      systemPrompt: 'You are a test codex runtime.',
+      tools: [],
+    })
+
+    const client = rpcMockState.instances[0]
+    const compactPromise = runtime.compact()
+    await Promise.resolve()
+
+    await expect(runtime.sendMessage('should wait')).rejects.toThrow('cannot send messages while compacting')
+
+    await client.emitNotification({
+      method: 'turn/started',
+      params: {
+        turn: { id: 'turn-compact-1' },
+      },
+    })
+    await client.emitNotification({
+      method: 'thread/compacted',
+      params: {
+        threadId: 'thread-compact',
+        turnId: 'turn-compact-1',
+      },
+    })
+    await client.emitNotification({
+      method: 'turn/completed',
+      params: {},
+    })
+
+    await expect(compactPromise).resolves.toEqual({})
+    expect(statuses).toContain('streaming')
+    expect(statuses).toContain('idle')
+    expect(runtimeErrors).toEqual([])
+
+    await runtime.terminate({ abort: false })
+  })
+
+  it('rejects manual codex compaction when the compaction turn completes with an error', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'swarm-codex-runtime-'))
+    const descriptor = makeDescriptor(tempDir)
+    await mkdir(dirname(descriptor.sessionFile), { recursive: true })
+
+    const runtimeErrors: RuntimeErrorEvent[] = []
+
+    rpcMockState.requestImpl.mockImplementation(async (_client: any, method: string) => {
+      if (method === 'initialize') {
+        return {}
+      }
+
+      if (method === 'account/read') {
+        return { requiresOpenaiAuth: false, account: { id: 'acct-1' } }
+      }
+
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-compact-error' } }
+      }
+
+      if (method === 'thread/compact/start') {
+        return {}
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const runtime = await CodexAgentRuntime.create({
+      descriptor,
+      callbacks: {
+        onStatusChange: async () => {},
+        onRuntimeError: async (_agentId, error) => {
+          runtimeErrors.push(error)
+        },
+      },
+      systemPrompt: 'You are a test codex runtime.',
+      tools: [],
+    })
+
+    const client = rpcMockState.instances[0]
+    const compactPromise = runtime.compact()
+    await Promise.resolve()
+
+    await client.emitNotification({
+      method: 'turn/started',
+      params: {
+        turn: { id: 'turn-compact-error-1' },
+      },
+    })
+    await client.emitNotification({
+      method: 'turn/completed',
+      params: {
+        status: 'failed',
+        error: {
+          message: 'compaction failed upstream',
+        },
+      },
+    })
+
+    await expect(compactPromise).rejects.toThrow('compaction failed upstream')
+    expect(runtimeErrors).toContainEqual(
+      expect.objectContaining({
+        phase: 'turn_completed',
+        message: 'compaction failed upstream',
+      }),
+    )
+
+    await runtime.terminate({ abort: false })
+  })
+
+  it('rejects custom instructions for manual codex compaction', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'swarm-codex-runtime-'))
+    const descriptor = makeDescriptor(tempDir)
+    await mkdir(dirname(descriptor.sessionFile), { recursive: true })
+
+    rpcMockState.requestImpl.mockImplementation(async (_client: any, method: string) => {
+      if (method === 'initialize') {
+        return {}
+      }
+
+      if (method === 'account/read') {
+        return { requiresOpenaiAuth: false, account: { id: 'acct-1' } }
+      }
+
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-compact-custom' } }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const runtime = await CodexAgentRuntime.create({
+      descriptor,
+      callbacks: {
+        onStatusChange: async () => {},
+      },
+      systemPrompt: 'You are a test codex runtime.',
+      tools: [],
+    })
+
+    await expect(runtime.compact('summarize this thread')).rejects.toThrow(
+      'Codex manual compaction does not support custom instructions',
+    )
+
+    const client = rpcMockState.instances[0]
+    expect(client.requestCalls.some((entry: { method: string }) => entry.method === 'thread/compact/start')).toBe(
+      false,
+    )
+
+    await runtime.terminate({ abort: false })
+  })
+
   it('translates turn notifications, handles runtime exit, and reports terminated status', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'swarm-codex-runtime-'))
     const descriptor = makeDescriptor(tempDir)

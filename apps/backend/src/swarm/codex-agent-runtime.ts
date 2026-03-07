@@ -71,6 +71,12 @@ interface ModelCapabilities {
   supportedEfforts: CodexReasoningEffort[];
 }
 
+interface PendingCompaction {
+  turnId?: string;
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
 const CODEX_EFFORT_RANK: Record<CodexReasoningEffort, number> = {
   none: 0,
   minimal: 1,
@@ -107,6 +113,7 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
   private modelCapabilitiesLoadPromise: Promise<void> | undefined;
   private turnItemCount = 0;
   private contextUsage: AgentContextUsage | undefined;
+  private pendingCompaction: PendingCompaction | undefined;
 
   private constructor(options: {
     descriptor: AgentDescriptor;
@@ -209,6 +216,10 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
   ): Promise<SendMessageReceipt> {
     this.ensureNotTerminated();
 
+    if (this.pendingCompaction) {
+      throw new Error(`Agent ${this.descriptor.agentId} cannot send messages while compacting`);
+    }
+
     const message = normalizeRuntimeUserMessage(input);
     const deliveryId = randomUUID();
 
@@ -271,6 +282,7 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
     this.activeTurnId = undefined;
     this.startRequestPending = false;
     this.contextUsage = undefined;
+    this.rejectPendingCompaction(new Error(`Agent ${this.descriptor.agentId} was terminated during compaction`));
 
     this.status = transitionAgentStatus(this.status, "terminated");
     this.descriptor.status = this.status;
@@ -303,13 +315,46 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
     this.queuedSteers = [];
     this.startRequestPending = false;
     this.activeTurnId = undefined;
+    this.rejectPendingCompaction(new Error(`Agent ${this.descriptor.agentId} stopped during compaction`));
 
     await this.updateStatus("idle");
   }
 
-  async compact(): Promise<unknown> {
+  async compact(customInstructions?: string): Promise<unknown> {
     this.ensureNotTerminated();
-    throw new Error(`Agent ${this.descriptor.agentId} does not support manual compaction`);
+
+    const trimmedInstructions = customInstructions?.trim();
+    if (trimmedInstructions) {
+      throw new Error("Codex manual compaction does not support custom instructions");
+    }
+
+    if (!this.threadId) {
+      throw new Error("Codex runtime thread is not initialized");
+    }
+
+    if (this.status !== "idle" || this.startRequestPending || this.activeTurnId || this.queuedSteers.length > 0) {
+      throw new Error(`Agent ${this.descriptor.agentId} cannot compact while busy (status: ${this.status})`);
+    }
+
+    if (this.pendingCompaction) {
+      throw new Error(`Agent ${this.descriptor.agentId} is already compacting`);
+    }
+
+    const promise = new Promise<void>((resolve, reject) => {
+      this.pendingCompaction = { resolve, reject };
+    });
+
+    try {
+      await this.rpc.request("thread/compact/start", {
+        threadId: this.threadId
+      });
+    } catch (error) {
+      this.rejectPendingCompaction(error);
+      throw error;
+    }
+
+    await promise;
+    return {};
   }
 
   getCustomEntries(customType: string): unknown[] {
@@ -667,6 +712,9 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
 
         if (turnId) {
           this.activeTurnId = turnId;
+          if (this.pendingCompaction && !this.pendingCompaction.turnId) {
+            this.pendingCompaction.turnId = turnId;
+          }
         }
 
         this.startRequestPending = false;
@@ -685,27 +733,26 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
           status?: unknown;
           [key: string]: unknown;
         } | undefined;
+        const pendingCompaction = this.pendingCompaction;
+        const turnError = completedParams?.lastTurnError ?? completedParams?.error;
 
-        if (completedParams) {
-          const turnError = completedParams.lastTurnError ?? completedParams.error;
-          if (turnError) {
-            this.logRuntimeInfo("turn_completed_error", {
-              error: turnError,
-              status: completedParams.status
-            });
-            await this.reportRuntimeError({
-              phase: "turn_completed",
-              message: typeof turnError === "string"
-                ? turnError
-                : typeof turnError === "object" && turnError !== null && "message" in turnError
-                  ? String((turnError as { message: unknown }).message)
-                  : JSON.stringify(turnError),
-              details: { status: completedParams.status }
-            });
-          }
+        if (turnError) {
+          this.logRuntimeInfo("turn_completed_error", {
+            error: turnError,
+            status: completedParams?.status
+          });
+          await this.reportRuntimeError({
+            phase: "turn_completed",
+            message: typeof turnError === "string"
+              ? turnError
+              : typeof turnError === "object" && turnError !== null && "message" in turnError
+                ? String((turnError as { message: unknown }).message)
+                : JSON.stringify(turnError),
+            details: { status: completedParams?.status }
+          });
         }
 
-        if (this.turnItemCount === 0) {
+        if (!pendingCompaction && this.turnItemCount === 0) {
           this.logRuntimeInfo("turn_completed_empty", {
             message: "Turn completed with zero items (no text, no tool calls). The model may have failed silently."
           });
@@ -732,6 +779,14 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
 
         if (this.callbacks.onAgentEnd) {
           await this.callbacks.onAgentEnd(this.descriptor.agentId);
+        }
+
+        if (pendingCompaction) {
+          if (turnError) {
+            this.rejectPendingCompaction(turnError);
+          } else {
+            this.resolvePendingCompaction();
+          }
         }
 
         return;
@@ -1025,6 +1080,7 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
     this.startRequestPending = false;
     this.activeTurnId = undefined;
     this.threadId = undefined;
+    this.rejectPendingCompaction(error);
 
     this.status = transitionAgentStatus(this.status, "terminated");
     this.descriptor.status = this.status;
@@ -1078,6 +1134,26 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
     await this.callbacks.onSessionEvent(this.descriptor.agentId, event);
   }
 
+  private resolvePendingCompaction(): void {
+    const pendingCompaction = this.pendingCompaction;
+    if (!pendingCompaction) {
+      return;
+    }
+
+    this.pendingCompaction = undefined;
+    pendingCompaction.resolve();
+  }
+
+  private rejectPendingCompaction(error: unknown): void {
+    const pendingCompaction = this.pendingCompaction;
+    if (!pendingCompaction) {
+      return;
+    }
+
+    this.pendingCompaction = undefined;
+    pendingCompaction.reject(new Error(describeTurnError(error)));
+  }
+
   private async recoverFromTurnFailure(
     phase: RuntimeErrorEvent["phase"],
     error: unknown,
@@ -1099,6 +1175,7 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
     const hadActiveTurn = this.status === "streaming" || Boolean(this.activeTurnId);
     this.startRequestPending = false;
     this.activeTurnId = undefined;
+    this.rejectPendingCompaction(normalized.message);
     await this.updateStatus("idle");
 
     if (hadActiveTurn) {
@@ -1554,4 +1631,16 @@ function parseDataUrl(value: string): RuntimeImageAttachment | undefined {
 
 function asNonNegativeInteger(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : -1;
+}
+
+function describeTurnError(error: unknown): string {
+  if (typeof error === "string") {
+    return error;
+  }
+
+  if (error && typeof error === "object" && "message" in error) {
+    return String((error as { message: unknown }).message);
+  }
+
+  return normalizeRuntimeError(error).message;
 }
