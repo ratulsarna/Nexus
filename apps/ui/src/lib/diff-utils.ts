@@ -52,7 +52,8 @@ export function extractFileDiffData(
 
   switch (kind) {
     case 'write':
-      return extractWriteDiff(parsed)
+      // For Codex file_change (mapped to write), prefer patch-based diff if available
+      return extractApplyPatchDiff(parsed) ?? extractWriteDiff(parsed)
     case 'edit':
       return extractEditDiff(parsed)
     case 'apply_patch':

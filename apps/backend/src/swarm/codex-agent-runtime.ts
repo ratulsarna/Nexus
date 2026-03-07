@@ -912,7 +912,7 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
           type: "tool_execution_start",
           toolName,
           toolCallId: item.id,
-          args: item
+          args: extractThreadItemStartArgs(item)
         });
         return;
       }
@@ -924,7 +924,7 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
         type: "tool_execution_end",
         toolName,
         toolCallId: item.id,
-        result: item,
+        result: extractThreadItemEndResult(item),
         isError: threadItemRepresentsError(item)
       });
     }
@@ -1530,6 +1530,124 @@ function threadItemRepresentsError(item: { type: string; [key: string]: unknown 
 
     default:
       return false;
+  }
+}
+
+function extractThreadItemStartArgs(item: { type: string; [key: string]: unknown }): unknown {
+  switch (item.type) {
+    case "commandExecution": {
+      const args: Record<string, unknown> = {};
+      const command = item.command;
+      if (typeof command === "string") {
+        args.command = command;
+      } else if (Array.isArray(command)) {
+        args.command = command.join(" ");
+      }
+      return args;
+    }
+
+    case "fileChange": {
+      const changes = Array.isArray(item.changes) ? item.changes : [];
+      const firstChange = changes[0] as Record<string, unknown> | undefined;
+      if (!firstChange) return {};
+
+      const args: Record<string, unknown> = {};
+      if (typeof firstChange.path === "string") args.path = firstChange.path;
+
+      const kind = firstChange.kind as Record<string, unknown> | undefined;
+      const kindType = typeof kind?.type === "string" ? kind.type : "update";
+
+      if (kindType === "create" && typeof firstChange.content === "string") {
+        args.content = firstChange.content;
+      } else if (typeof firstChange.diff === "string") {
+        const filePath = typeof firstChange.path === "string" ? firstChange.path : "file";
+        args.patch = `--- a/${filePath}\n+++ b/${filePath}\n${firstChange.diff}`;
+      }
+
+      if (changes.length > 1) {
+        args.additionalFiles = changes.slice(1).map(
+          (c: unknown) => typeof (c as Record<string, unknown>)?.path === "string"
+            ? (c as Record<string, unknown>).path
+            : "(unknown)"
+        );
+      }
+
+      return args;
+    }
+
+    case "mcpToolCall": {
+      const args: Record<string, unknown> = {};
+      if (typeof item.server === "string") args.server = item.server;
+      if (typeof item.tool === "string") args.toolName = item.tool;
+      const innerArgs = item.arguments;
+      if (innerArgs && typeof innerArgs === "object" && !Array.isArray(innerArgs)) {
+        Object.assign(args, innerArgs as Record<string, unknown>);
+      }
+      return args;
+    }
+
+    case "collabAgentToolCall": {
+      const args: Record<string, unknown> = {};
+      if (typeof item.tool === "string") args.toolName = item.tool;
+      const innerArgs = item.arguments;
+      if (innerArgs && typeof innerArgs === "object" && !Array.isArray(innerArgs)) {
+        Object.assign(args, innerArgs as Record<string, unknown>);
+      }
+      return args;
+    }
+
+    case "webSearch": {
+      const args: Record<string, unknown> = {};
+      if (typeof item.query === "string") args.query = item.query;
+      return args;
+    }
+
+    case "imageView": {
+      const args: Record<string, unknown> = {};
+      if (typeof item.url === "string") args.url = item.url;
+      if (typeof item.path === "string") args.path = item.path;
+      return args;
+    }
+
+    default:
+      return item;
+  }
+}
+
+function extractThreadItemEndResult(item: { type: string; [key: string]: unknown }): unknown {
+  switch (item.type) {
+    case "commandExecution": {
+      const result: Record<string, unknown> = {};
+      if (typeof item.output === "string" && item.output.length > 0) result.output = item.output;
+      if (typeof item.exit_code === "number") result.exit_code = item.exit_code;
+      if (typeof item.exitCode === "number") result.exitCode = item.exitCode;
+      if (typeof item.status === "string") result.status = item.status;
+      return Object.keys(result).length > 0 ? result : { summary: "Tool execution completed" };
+    }
+
+    case "fileChange": {
+      const status = typeof item.status === "string" ? item.status : "completed";
+      if (status !== "completed") {
+        return { status };
+      }
+      return { summary: "Tool execution completed" };
+    }
+
+    case "mcpToolCall":
+    case "collabAgentToolCall": {
+      const result: Record<string, unknown> = {};
+      if (typeof item.output === "string") result.output = item.output;
+      if (typeof item.status === "string") result.status = item.status;
+      if (item.result !== undefined) result.result = item.result;
+      return Object.keys(result).length > 0 ? result : { summary: "Tool execution completed" };
+    }
+
+    case "webSearch":
+    case "imageView":
+    default: {
+      const { type: _type, id: _id, ...rest } = item as Record<string, unknown>;
+      return Object.keys(rest).length > 0 ? rest : { summary: "Tool execution completed" };
+    }
   }
 }
 
