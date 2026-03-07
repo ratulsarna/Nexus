@@ -1,19 +1,18 @@
 import type { AgentDescriptor, ManagerModelPreset } from '@nexus/protocol'
 
 export function inferModelPreset(agent: AgentDescriptor): ManagerModelPreset | undefined {
-  const provider = agent.model.provider.trim().toLowerCase()
-  const modelId = agent.model.modelId.trim().toLowerCase()
+  const provider =
+    typeof agent.model.provider === 'string' ? agent.model.provider.trim().toLowerCase() : ''
 
-  if (provider === 'openai-codex-app-server' && modelId === 'default') {
+  if (!provider) {
+    return undefined
+  }
+
+  if (provider === 'openai-codex-app-server') {
     return 'codex-app'
   }
 
-  // Legacy codex-app model id aliases.
-  if (provider === 'openai-codex-app-server' && (modelId === 'codex-app' || modelId === 'codex-app-server')) {
-    return 'codex-app'
-  }
-
-  if (provider === 'claude-agent-sdk' && modelId === 'claude-opus-4-6') {
+  if (provider === 'claude-agent-sdk') {
     return 'claude-agent-sdk'
   }
 

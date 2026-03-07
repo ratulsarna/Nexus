@@ -163,7 +163,7 @@ describe('AgentSidebar', () => {
     renderSidebar({
       agents: [
         manager('manager-claude', { provider: 'claude-agent-sdk', modelId: 'claude-opus-4-6' }),
-        worker('worker-codex', 'manager-claude', { provider: 'openai-codex-app-server', modelId: 'default' }),
+        worker('worker-codex', 'manager-claude', { provider: 'openai-codex-app-server', modelId: 'gpt-5.4' }),
       ],
     })
 
