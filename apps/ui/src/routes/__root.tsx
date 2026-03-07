@@ -43,6 +43,8 @@ function RootDocument({ children }: { children: React.ReactNode }) {
     initializeThemePreference()
   }, [])
 
+  const showDevtools = import.meta.env.DEV
+
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
@@ -52,17 +54,19 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       <body className="overflow-x-hidden">
         <TooltipProvider>
           {children}
-          <TanStackDevtools
-            config={{
-              position: 'bottom-right',
-            }}
-            plugins={[
-              {
-                name: 'Tanstack Router',
-                render: <TanStackRouterDevtoolsPanel />,
-              },
-            ]}
-          />
+          {showDevtools ? (
+            <TanStackDevtools
+              config={{
+                position: 'bottom-left',
+              }}
+              plugins={[
+                {
+                  name: 'Tanstack Router',
+                  render: <TanStackRouterDevtoolsPanel />,
+                },
+              ]}
+            />
+          ) : null}
         </TooltipProvider>
         <Scripts />
       </body>

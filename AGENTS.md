@@ -81,6 +81,8 @@ pnpm --filter @nexus/ui exec tsc --noEmit -p tsconfig.json
 - `pnpm prod:daemon` starts the daemon once; rerunning it does not restart an already running child.
 - After code changes, use `pnpm prod:restart` to force a fresh `pnpm prod` cycle in daemon mode.
 - For ad-hoc Node scripts that import backend-only deps (for example `@anthropic-ai/claude-agent-sdk`), run them from `apps/backend` so module resolution works.
+- For browser smoke tests, prefer the root scripts (`pnpm dev`, `pnpm prod`) so UI host/port binding matches the documented ports.
+- In the create-manager dialog, wait for the model catalog defaults to settle before treating the submit button state as meaningful.
 
 ## Shadcn UI
 
