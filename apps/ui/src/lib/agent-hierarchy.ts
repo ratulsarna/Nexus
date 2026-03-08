@@ -65,13 +65,15 @@ export function buildManagerTreeRows(agents: AgentDescriptor[]): {
 }
 
 export function chooseFallbackAgentId(agents: AgentDescriptor[], preferredAgentId?: string | null): string | null {
+  // If the preferred agent exists in the full list (even if terminated/stopped),
+  // preserve the selection — the user intentionally clicked on it.
+  if (preferredAgentId && agents.some((agent) => agent.agentId === preferredAgentId && isSidebarVisibleAgent(agent))) {
+    return preferredAgentId
+  }
+
   const activeAgents = agents.filter(isActiveAgent)
   if (activeAgents.length === 0) {
     return null
-  }
-
-  if (preferredAgentId && activeAgents.some((agent) => agent.agentId === preferredAgentId)) {
-    return preferredAgentId
   }
 
   const primaryManagerId = getPrimaryManagerId(activeAgents)

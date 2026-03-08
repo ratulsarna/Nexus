@@ -205,6 +205,7 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
 
   private readonly descriptors = new Map<string, AgentDescriptor>();
   private readonly runtimes = new Map<string, SwarmAgentRuntime>();
+  private readonly restartingManagerIds = new Set<string>();
   private readonly conversationEntriesByAgentId = new Map<string, ConversationEntryEvent[]>();
   private readonly crossManagerMessageLog = new Map<string, number[]>();
   private readonly conversationProjector: ConversationProjector;
@@ -1632,39 +1633,50 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
       return cloneDescriptor(descriptor);
     }
 
-    // Clean up stale runtime (if any)
-    const existingRuntime = this.runtimes.get(managerId);
-    if (existingRuntime) {
-      await existingRuntime.terminate({ abort: true });
-      this.runtimes.delete(managerId);
+    // Guard against concurrent restarts of the same manager
+    if (this.restartingManagerIds.has(managerId)) {
+      this.logDebug("manager:restart:already-in-progress", { managerId });
+      return cloneDescriptor(descriptor);
     }
 
-    // Transition to idle (terminated → idle is valid per state machine)
-    descriptor.status = transitionAgentStatus(descriptor.status, "idle");
-    descriptor.contextUsage = undefined;
-    descriptor.updatedAt = this.now();
-    this.descriptors.set(managerId, descriptor);
-    await this.saveStore();
+    this.restartingManagerIds.add(managerId);
+    try {
+      // Clean up stale runtime (if any)
+      const existingRuntime = this.runtimes.get(managerId);
+      if (existingRuntime) {
+        await existingRuntime.terminate({ abort: true });
+        this.runtimes.delete(managerId);
+      }
 
-    // Create fresh runtime — Codex will resume thread from persisted state
-    const runtime = await this.createRuntimeForDescriptor(
-      descriptor,
-      this.resolveSystemPromptForDescriptor(descriptor)
-    );
-    this.runtimes.set(managerId, runtime);
+      // Transition to idle (terminated → idle is valid per state machine)
+      descriptor.status = transitionAgentStatus(descriptor.status, "idle");
+      descriptor.contextUsage = undefined;
+      descriptor.updatedAt = this.now();
+      this.descriptors.set(managerId, descriptor);
+      await this.saveStore();
 
-    descriptor.contextUsage = runtime.getContextUsage();
+      // Create fresh runtime — Codex will resume thread from persisted state
+      const runtime = await this.createRuntimeForDescriptor(
+        descriptor,
+        this.resolveSystemPromptForDescriptor(descriptor)
+      );
+      this.runtimes.set(managerId, runtime);
 
-    // Do NOT emit conversation_reset — history is preserved
-    this.emitStatus(managerId, descriptor.status, runtime.getPendingCount(), descriptor.contextUsage);
-    this.emitAgentsSnapshot();
+      descriptor.contextUsage = runtime.getContextUsage();
 
-    this.logDebug("manager:restart:ready", {
-      callerAgentId,
-      managerId
-    });
+      // Do NOT emit conversation_reset — history is preserved
+      this.emitStatus(managerId, descriptor.status, runtime.getPendingCount(), descriptor.contextUsage);
+      this.emitAgentsSnapshot();
 
-    return cloneDescriptor(descriptor);
+      this.logDebug("manager:restart:ready", {
+        callerAgentId,
+        managerId
+      });
+
+      return cloneDescriptor(descriptor);
+    } finally {
+      this.restartingManagerIds.delete(managerId);
+    }
   }
 
   getConfig(): SwarmConfig {

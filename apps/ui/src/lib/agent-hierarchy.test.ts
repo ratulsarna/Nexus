@@ -86,7 +86,24 @@ describe('agent-hierarchy', () => {
     const erroredWorker = { ...worker('worker-error', 'manager-stopped'), status: 'error' as const }
 
     expect(getPrimaryManagerId([stoppedManager])).toBeNull()
+    // With no preferred agent, only active agents are candidates — neither is active
     expect(chooseFallbackAgentId([stoppedManager, erroredWorker], null)).toBeNull()
+  })
+
+  it('preserves preferred agent selection for terminated/stopped managers (no selection thrash)', () => {
+    const activeManager = manager('mgr-active')
+    const terminatedManager = { ...manager('mgr-terminated'), status: 'terminated' as const }
+
+    // User clicked on a terminated manager — should stay selected, not thrash to active one
+    expect(chooseFallbackAgentId([activeManager, terminatedManager], 'mgr-terminated')).toBe('mgr-terminated')
+
+    // Stopped too
+    const stoppedManager = { ...manager('mgr-stopped'), status: 'stopped' as const }
+    expect(chooseFallbackAgentId([activeManager, stoppedManager], 'mgr-stopped')).toBe('mgr-stopped')
+
+    // Error agents are hidden from sidebar — should NOT be preserved
+    const errorManager = { ...manager('mgr-error'), status: 'error' as const }
+    expect(chooseFallbackAgentId([activeManager, errorManager], 'mgr-error')).toBe('mgr-active')
   })
 
   it('includes terminated managers in sidebar rows', () => {
