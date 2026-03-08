@@ -23,6 +23,7 @@ export type ClientCommand =
       requestId?: string
     }
   | { type: 'delete_manager'; managerId: string; requestId?: string }
+  | { type: 'restart_manager'; managerId: string; requestId?: string }
   | {
       type: 'update_manager'
       managerId: string

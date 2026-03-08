@@ -1074,6 +1074,14 @@ export class CodexAgentRuntime implements SwarmAgentRuntime {
       }
     });
 
+    // Re-check after async gap: terminate() may have run concurrently
+    // (e.g. restartManager called while reportRuntimeError was in-flight),
+    // setting this.status to "terminated" and installing a fresh runtime.
+    // Proceeding would emit a stale callback that deletes the new runtime.
+    if (this.status === "terminated") {
+      return;
+    }
+
     this.pendingDeliveries = [];
     this.queuedSteers = [];
     this.toolNameByItemId.clear();

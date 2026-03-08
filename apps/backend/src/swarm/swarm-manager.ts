@@ -1615,6 +1615,58 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
     });
   }
 
+  async restartManager(
+    callerAgentId: string,
+    managerId: string
+  ): Promise<AgentDescriptor> {
+    const descriptor = this.getRequiredManagerDescriptor(managerId);
+
+    this.logDebug("manager:restart:start", {
+      callerAgentId,
+      managerId,
+      currentStatus: descriptor.status
+    });
+
+    // No-op if already idle with a live runtime
+    if (descriptor.status === "idle" && this.runtimes.has(managerId)) {
+      return cloneDescriptor(descriptor);
+    }
+
+    // Clean up stale runtime (if any)
+    const existingRuntime = this.runtimes.get(managerId);
+    if (existingRuntime) {
+      await existingRuntime.terminate({ abort: true });
+      this.runtimes.delete(managerId);
+    }
+
+    // Transition to idle (terminated → idle is valid per state machine)
+    descriptor.status = transitionAgentStatus(descriptor.status, "idle");
+    descriptor.contextUsage = undefined;
+    descriptor.updatedAt = this.now();
+    this.descriptors.set(managerId, descriptor);
+    await this.saveStore();
+
+    // Create fresh runtime — Codex will resume thread from persisted state
+    const runtime = await this.createRuntimeForDescriptor(
+      descriptor,
+      this.resolveSystemPromptForDescriptor(descriptor)
+    );
+    this.runtimes.set(managerId, runtime);
+
+    descriptor.contextUsage = runtime.getContextUsage();
+
+    // Do NOT emit conversation_reset — history is preserved
+    this.emitStatus(managerId, descriptor.status, runtime.getPendingCount(), descriptor.contextUsage);
+    this.emitAgentsSnapshot();
+
+    this.logDebug("manager:restart:ready", {
+      callerAgentId,
+      managerId
+    });
+
+    return cloneDescriptor(descriptor);
+  }
+
   getConfig(): SwarmConfig {
     return this.config;
   }
@@ -2196,9 +2248,13 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
       shouldPersist = true;
     }
 
-    if (isNonRunningAgentStatus(nextStatus) && descriptor.contextUsage) {
-      descriptor.contextUsage = undefined;
-      shouldPersist = true;
+    if (isNonRunningAgentStatus(nextStatus)) {
+      this.runtimes.delete(agentId);
+
+      if (descriptor.contextUsage) {
+        descriptor.contextUsage = undefined;
+        shouldPersist = true;
+      }
     }
 
     this.descriptors.set(agentId, descriptor);

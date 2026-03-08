@@ -81,15 +81,57 @@ describe('agent-hierarchy', () => {
     expect(chooseFallbackAgentId(agents, 'missing-agent')).toBe('manager')
   })
 
-  it('treats stopped and errored agents as inactive', () => {
+  it('treats stopped and errored agents as inactive for fallback/primary selection', () => {
     const stoppedManager = { ...manager('manager-stopped'), status: 'stopped' as const }
     const erroredWorker = { ...worker('worker-error', 'manager-stopped'), status: 'error' as const }
 
-    const { managerRows, orphanWorkers } = buildManagerTreeRows([stoppedManager, erroredWorker])
-
-    expect(managerRows).toHaveLength(0)
-    expect(orphanWorkers).toHaveLength(0)
     expect(getPrimaryManagerId([stoppedManager])).toBeNull()
     expect(chooseFallbackAgentId([stoppedManager, erroredWorker], null)).toBeNull()
+  })
+
+  it('includes terminated managers in sidebar rows', () => {
+    const agents = [{ ...manager('mgr'), status: 'terminated' as const }]
+    const { managerRows } = buildManagerTreeRows(agents)
+    expect(managerRows).toHaveLength(1)
+    expect(managerRows[0]?.manager.agentId).toBe('mgr')
+  })
+
+  it('includes stopped managers in sidebar rows', () => {
+    const agents = [{ ...manager('mgr'), status: 'stopped' as const }]
+    const { managerRows } = buildManagerTreeRows(agents)
+    expect(managerRows).toHaveLength(1)
+  })
+
+  it('excludes error-status managers from sidebar rows', () => {
+    const agents = [{ ...manager('mgr'), status: 'error' as const }]
+    const { managerRows } = buildManagerTreeRows(agents)
+    expect(managerRows).toHaveLength(0)
+  })
+
+  it('sorts active managers before non-active managers', () => {
+    const agents = [
+      { ...manager('mgr-dead'), status: 'terminated' as const },
+      manager('mgr-live'),
+    ]
+    const { managerRows } = buildManagerTreeRows(agents)
+    expect(managerRows[0]?.manager.agentId).toBe('mgr-live')
+    expect(managerRows[1]?.manager.agentId).toBe('mgr-dead')
+  })
+
+  it('does not consider terminated managers for getPrimaryManagerId', () => {
+    expect(getPrimaryManagerId([{ ...manager('mgr'), status: 'terminated' as const }])).toBeNull()
+  })
+
+  it('does not consider terminated managers for chooseFallbackAgentId', () => {
+    expect(chooseFallbackAgentId([{ ...manager('mgr'), status: 'terminated' as const }])).toBeNull()
+  })
+
+  it('excludes terminated workers from sidebar rows', () => {
+    const agents = [
+      manager('mgr'),
+      { ...worker('w1', 'mgr'), status: 'terminated' as const },
+    ]
+    const { managerRows } = buildManagerTreeRows(agents)
+    expect(managerRows[0]?.workers).toHaveLength(0)
   })
 })

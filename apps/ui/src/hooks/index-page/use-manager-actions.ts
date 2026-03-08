@@ -89,6 +89,8 @@ export function useManagerActions({
   handleRequestDeleteManager: (managerId: string) => void
   handleConfirmDeleteManager: () => Promise<void>
   handleCloseDeleteManagerDialog: () => void
+  isRestartingManager: boolean
+  handleRestartManager: (managerId: string) => Promise<void>
   isCompactingManager: boolean
   handleCompactManager: (customInstructions?: string) => Promise<void>
   isStoppingAllAgents: boolean
@@ -117,6 +119,7 @@ export function useManagerActions({
   const [deleteManagerError, setDeleteManagerError] = useState<string | null>(null)
   const [isDeletingManager, setIsDeletingManager] = useState(false)
 
+  const [isRestartingManager, setIsRestartingManager] = useState(false)
   const [isCompactingManager, setIsCompactingManager] = useState(false)
   const [isStoppingAllAgents, setIsStoppingAllAgents] = useState(false)
   const createManagerCatalogRequestIdRef = useRef(0)
@@ -281,6 +284,32 @@ export function useManagerActions({
     setCreateManagerError(null)
     setCreateManagerSelectionHint(null)
   }, [])
+
+  const handleRestartManager = useCallback(async (managerId: string) => {
+    const client = clientRef.current
+    if (!client) {
+      return
+    }
+
+    setIsRestartingManager(true)
+
+    try {
+      const restarted = await client.restartManager(managerId)
+      navigateToRoute({ view: 'chat', agentId: restarted.agentId })
+      client.subscribeToAgent(restarted.agentId)
+      setState((previous) => ({
+        ...previous,
+        lastError: null,
+      }))
+    } catch (error) {
+      setState((previous) => ({
+        ...previous,
+        lastError: `Failed to restart manager: ${toErrorMessage(error)}`,
+      }))
+    } finally {
+      setIsRestartingManager(false)
+    }
+  }, [clientRef, navigateToRoute, setState])
 
   const handleCompactManager = useCallback(async (customInstructions?: string) => {
     if (!isActiveManager || !activeAgentId) {
@@ -605,6 +634,8 @@ export function useManagerActions({
     handleRequestDeleteManager,
     handleConfirmDeleteManager,
     handleCloseDeleteManagerDialog,
+    isRestartingManager,
+    handleRestartManager,
     isCompactingManager,
     handleCompactManager,
     isStoppingAllAgents,

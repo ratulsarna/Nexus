@@ -1,6 +1,7 @@
 import type { AgentDescriptor } from '@nexus/protocol'
 
 const ACTIVE_STATUSES = new Set(['idle', 'streaming'])
+const SIDEBAR_HIDDEN_STATUSES = new Set(['error'])
 
 function byCreatedAtThenId(a: AgentDescriptor, b: AgentDescriptor): number {
   const createdOrder = a.createdAt.localeCompare(b.createdAt)
@@ -10,6 +11,10 @@ function byCreatedAtThenId(a: AgentDescriptor, b: AgentDescriptor): number {
 
 export function isActiveAgent(agent: AgentDescriptor): boolean {
   return ACTIVE_STATUSES.has(agent.status)
+}
+
+export function isSidebarVisibleAgent(agent: AgentDescriptor): boolean {
+  return !SIDEBAR_HIDDEN_STATUSES.has(agent.status)
 }
 
 export function getPrimaryManagerId(agents: AgentDescriptor[]): string | null {
@@ -28,9 +33,15 @@ export function buildManagerTreeRows(agents: AgentDescriptor[]): {
   managerRows: ManagerTreeRow[]
   orphanWorkers: AgentDescriptor[]
 } {
-  const activeAgents = agents.filter(isActiveAgent)
-  const managers = activeAgents.filter((agent) => agent.role === 'manager').sort(byCreatedAtThenId)
-  const workers = activeAgents.filter((agent) => agent.role === 'worker').sort(byCreatedAtThenId)
+  const managers = agents
+    .filter((agent) => agent.role === 'manager' && isSidebarVisibleAgent(agent))
+    .sort((a, b) => {
+      const aRank = isActiveAgent(a) ? 0 : 1
+      const bRank = isActiveAgent(b) ? 0 : 1
+      if (aRank !== bRank) return aRank - bRank
+      return byCreatedAtThenId(a, b)
+    })
+  const workers = agents.filter((agent) => agent.role === 'worker' && isActiveAgent(agent)).sort(byCreatedAtThenId)
 
   const workersByManager = new Map<string, AgentDescriptor[]>()
   for (const worker of workers) {
