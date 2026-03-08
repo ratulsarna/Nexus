@@ -1500,6 +1500,69 @@ describe('SwarmWebSocketServer', () => {
     await server.stop()
   })
 
+  it('interrupts the selected agent over websocket without terminating it', async () => {
+    const port = await getAvailablePort()
+    const config = await makeTempConfig(port, true)
+
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const worker = await manager.spawnAgent('manager', { agentId: 'Interruptible Worker' })
+    const workerRuntime = manager.runtimeByAgentId.get(worker.agentId)
+    expect(workerRuntime).toBeDefined()
+
+    const state = manager as unknown as { descriptors: Map<string, AgentDescriptor> }
+    state.descriptors.get(worker.agentId)!.status = 'streaming'
+    workerRuntime!.descriptor.status = 'streaming'
+
+    const server = new SwarmWebSocketServer({
+      swarmManager: manager,
+      host: config.host,
+      port: config.port,
+      allowNonManagerSubscriptions: config.allowNonManagerSubscriptions,
+    })
+
+    await server.start()
+
+    const client = new WebSocket(`ws://${config.host}:${config.port}`)
+    const events: ServerEvent[] = []
+
+    client.on('message', (raw) => {
+      events.push(JSON.parse(raw.toString()) as ServerEvent)
+    })
+
+    await once(client, 'open')
+    client.send(JSON.stringify({ type: 'subscribe', agentId: worker.agentId }))
+    await waitForEvent(events, (event) => event.type === 'ready' && event.subscribedAgentId === worker.agentId)
+
+    client.send(JSON.stringify({ type: 'interrupt_agent', agentId: worker.agentId, requestId: 'interrupt-1' }))
+
+    const resultEvent = await waitForEvent(
+      events,
+      (event) => event.type === 'interrupt_agent_result' && event.agentId === worker.agentId,
+    )
+    expect(resultEvent.type).toBe('interrupt_agent_result')
+    if (resultEvent.type === 'interrupt_agent_result') {
+      expect(resultEvent.managerId).toBe('manager')
+      expect(resultEvent.interrupted).toBe(true)
+      expect(resultEvent.requestId).toBe('interrupt-1')
+    }
+
+    const snapshotEvent = await waitForEvent(
+      events,
+      (event) =>
+        event.type === 'agents_snapshot' &&
+        event.agents.some((agent) => agent.agentId === worker.agentId && agent.status === 'idle'),
+    )
+    expect(snapshotEvent.type).toBe('agents_snapshot')
+    expect(workerRuntime?.stopInFlightCalls).toEqual([{ abort: true }])
+    expect(workerRuntime?.terminateCalls).toBe(0)
+
+    client.close()
+    await once(client, 'close')
+    await server.stop()
+  })
+
   it('creates managers over websocket with model presets and broadcasts manager_created', async () => {
     const port = await getAvailablePort()
     const config = await makeTempConfig(port, true)
@@ -2182,6 +2245,70 @@ describe('SwarmWebSocketServer', () => {
       (event) => event.type === 'agent_status' && event.agentId === ownedWorker.agentId && event.status === 'terminated',
     )
     expect(statusEvent.type).toBe('agent_status')
+
+    client.close()
+    await once(client, 'close')
+    await server.stop()
+  })
+
+  it('enforces strict ownership for interrupt_agent based on selected manager context', async () => {
+    const port = await getAvailablePort()
+    const config = await makeTempConfig(port, true)
+
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const secondary = await manager.createManager('manager', {
+      name: 'Owner Manager',
+      cwd: config.defaultCwd,
+    })
+    const ownedWorker = await manager.spawnAgent(secondary.agentId, { agentId: 'Interrupt Owned Worker' })
+
+    const server = new SwarmWebSocketServer({
+      swarmManager: manager,
+      host: config.host,
+      port: config.port,
+      allowNonManagerSubscriptions: config.allowNonManagerSubscriptions,
+    })
+
+    await server.start()
+
+    const client = new WebSocket(`ws://${config.host}:${config.port}`)
+    const events: ServerEvent[] = []
+    client.on('message', (raw) => {
+      events.push(JSON.parse(raw.toString()) as ServerEvent)
+    })
+
+    await once(client, 'open')
+    client.send(JSON.stringify({ type: 'subscribe', agentId: 'manager' }))
+    await waitForEvent(events, (event) => event.type === 'ready')
+
+    client.send(JSON.stringify({ type: 'interrupt_agent', agentId: ownedWorker.agentId }))
+
+    const denied = await waitForEvent(
+      events,
+      (event) => event.type === 'error' && event.code === 'INTERRUPT_AGENT_FAILED',
+    )
+    expect(denied.type).toBe('error')
+
+    client.send(JSON.stringify({ type: 'subscribe', agentId: secondary.agentId }))
+    await waitForEvent(
+      events,
+      (event) => event.type === 'ready' && event.subscribedAgentId === secondary.agentId,
+    )
+
+    client.send(JSON.stringify({ type: 'interrupt_agent', agentId: ownedWorker.agentId, requestId: 'interrupt-owned' }))
+
+    const resultEvent = await waitForEvent(
+      events,
+      (event) => event.type === 'interrupt_agent_result' && event.agentId === ownedWorker.agentId,
+    )
+    expect(resultEvent.type).toBe('interrupt_agent_result')
+    if (resultEvent.type === 'interrupt_agent_result') {
+      expect(resultEvent.requestId).toBe('interrupt-owned')
+      expect(resultEvent.managerId).toBe(secondary.agentId)
+      expect(resultEvent.interrupted).toBe(true)
+    }
 
     client.close()
     await once(client, 'close')

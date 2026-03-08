@@ -1293,6 +1293,98 @@ describe('SwarmManager', () => {
     expect(manager.runtimeByAgentId.has(worker.agentId)).toBe(true)
   })
 
+  it('interrupts a worker without terminating its runtime', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const worker = await manager.spawnAgent('manager', { agentId: 'Interruptible Worker' })
+    const runtime = manager.runtimeByAgentId.get(worker.agentId)
+    expect(runtime).toBeDefined()
+
+    const state = manager as unknown as { descriptors: Map<string, AgentDescriptor> }
+    const workerDescriptor = state.descriptors.get(worker.agentId)
+    expect(workerDescriptor).toBeDefined()
+
+    workerDescriptor!.status = 'streaming'
+    runtime!.busy = true
+
+    const interrupted = await manager.interruptAgent('manager', worker.agentId)
+
+    expect(interrupted).toEqual({
+      agentId: worker.agentId,
+      managerId: 'manager',
+      interrupted: true,
+    })
+    expect(runtime!.stopInFlightCalls).toEqual([{ abort: true }])
+    expect(runtime!.terminateCalls).toEqual([])
+    expect(manager.runtimeByAgentId.has(worker.agentId)).toBe(true)
+
+    const workerAfter = manager.listAgents().find((agent) => agent.agentId === worker.agentId)
+    expect(workerAfter?.status).toBe('idle')
+  })
+
+  it('interrupts a queued worker even when the descriptor is still idle', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const worker = await manager.spawnAgent('manager', { agentId: 'Queued Worker' })
+    const runtime = manager.runtimeByAgentId.get(worker.agentId)
+    expect(runtime).toBeDefined()
+
+    const state = manager as unknown as { descriptors: Map<string, AgentDescriptor> }
+    const workerDescriptor = state.descriptors.get(worker.agentId)
+    expect(workerDescriptor).toBeDefined()
+
+    workerDescriptor!.status = 'idle'
+    runtime!.busy = true
+
+    const interrupted = await manager.interruptAgent('manager', worker.agentId)
+
+    expect(interrupted).toEqual({
+      agentId: worker.agentId,
+      managerId: 'manager',
+      interrupted: true,
+    })
+    expect(runtime!.stopInFlightCalls).toEqual([{ abort: true }])
+    expect(runtime!.terminateCalls).toEqual([])
+  })
+
+  it('interrupts a manager only when targeting itself', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const secondary = await manager.createManager('manager', {
+      name: 'Secondary Manager',
+      cwd: config.defaultCwd,
+    })
+    const managerRuntime = manager.runtimeByAgentId.get('manager')
+    const secondaryRuntime = manager.runtimeByAgentId.get(secondary.agentId)
+    expect(managerRuntime).toBeDefined()
+    expect(secondaryRuntime).toBeDefined()
+
+    const state = manager as unknown as { descriptors: Map<string, AgentDescriptor> }
+    state.descriptors.get('manager')!.status = 'streaming'
+    state.descriptors.get(secondary.agentId)!.status = 'streaming'
+    managerRuntime!.busy = true
+    secondaryRuntime!.busy = true
+
+    await expect(manager.interruptAgent('manager', secondary.agentId)).rejects.toThrow(
+      `Only selected manager can interrupt manager ${secondary.agentId}`,
+    )
+
+    const interrupted = await manager.interruptAgent('manager', 'manager')
+    expect(interrupted).toEqual({
+      agentId: 'manager',
+      managerId: 'manager',
+      interrupted: true,
+    })
+    expect(managerRuntime!.stopInFlightCalls).toEqual([{ abort: true }])
+    expect(secondaryRuntime!.stopInFlightCalls).toEqual([])
+  })
+
   it('normalizes persisted streaming workers to idle on restart without recreating runtimes', async () => {
     const config = await makeTempConfig()
 
