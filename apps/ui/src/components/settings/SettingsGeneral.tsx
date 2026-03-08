@@ -86,7 +86,6 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
   const [isLoadingRuntimeCatalog, setIsLoadingRuntimeCatalog] = useState(false)
   const [runtimeCatalogError, setRuntimeCatalogError] = useState<string | null>(null)
   const [runtimeDraft, setRuntimeDraft] = useState<ManagerRuntimeDraft | null>(null)
-  const [runtimeSelectionHint, setRuntimeSelectionHint] = useState<string | null>(null)
   const [runtimeSaveError, setRuntimeSaveError] = useState<string | null>(null)
   const [runtimeSaveSuccess, setRuntimeSaveSuccess] = useState<string | null>(null)
   const [isSavingRuntimeSettings, setIsSavingRuntimeSettings] = useState(false)
@@ -154,7 +153,6 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
 
     previousRuntimeManagerIdRef.current = nextManagerId
     setIsSavingRuntimeSettings(false)
-    setRuntimeSelectionHint(null)
     setRuntimeSaveError(null)
     setRuntimeSaveSuccess(null)
 
@@ -270,43 +268,6 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
     ]
   }, [runtimeCatalog, runtimeDraft?.provider])
 
-  const runtimeModelOptions = useMemo(() => {
-    if (!runtimeDraft) {
-      return []
-    }
-
-    const options = getManagerSettingsModelOptions(runtimeCatalog, runtimeDraft.provider)
-    if (options.some((option) => option.value === runtimeDraft.modelId)) {
-      return options
-    }
-
-    return [
-      ...options,
-      {
-        value: runtimeDraft.modelId,
-        label: `${runtimeDraft.modelId} (unsupported)`,
-      },
-    ]
-  }, [runtimeCatalog, runtimeDraft])
-
-  const runtimeThinkingOptions = useMemo(() => {
-    if (!runtimeDraft) {
-      return []
-    }
-
-    const allowedThinkingLevels = getManagerSettingsAllowedThinkingLevels(
-      runtimeCatalog,
-      runtimeDraft.provider,
-      runtimeDraft.modelId,
-    )
-
-    if (allowedThinkingLevels.includes(runtimeDraft.thinkingLevel)) {
-      return allowedThinkingLevels
-    }
-
-    return [...allowedThinkingLevels, runtimeDraft.thinkingLevel]
-  }, [runtimeCatalog, runtimeDraft])
-
   const spawnProviderOptions = useMemo(() => {
     const options = getCatalogProviderOptions(spawnCatalog)
     const currentProvider = spawnDraft?.provider
@@ -363,7 +324,6 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
   const resetRuntimeFeedback = useCallback(() => {
     setRuntimeSaveError(null)
     setRuntimeSaveSuccess(null)
-    setRuntimeSelectionHint(null)
   }, [])
 
   const handleRuntimeProviderChange = useCallback((nextProvider: string) => {
@@ -378,7 +338,6 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
         getManagerSettingsDefaultModelForProvider(runtimeCatalog, nextProvider) ??
         getManagerSettingsModelOptions(runtimeCatalog, nextProvider)[0]?.value ??
         current.modelId
-      const shouldResetModel = nextModelId !== current.modelId
 
       const nextThinkingOptions = getManagerSettingsAllowedThinkingLevels(runtimeCatalog, nextProvider, nextModelId)
       const defaultThinkingLevel = getManagerSettingsDefaultThinkingLevel(runtimeCatalog, nextProvider, nextModelId)
@@ -390,15 +349,6 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
       const nextThinkingLevel = nextThinkingOptions.includes(current.thinkingLevel)
         ? current.thinkingLevel
         : fallbackThinkingLevel
-      const shouldResetThinking = nextThinkingLevel !== current.thinkingLevel
-
-      if (shouldResetModel && shouldResetThinking) {
-        setRuntimeSelectionHint('Model and thinking were reset for the selected provider.')
-      } else if (shouldResetModel) {
-        setRuntimeSelectionHint('Model was reset for the selected provider.')
-      } else if (shouldResetThinking) {
-        setRuntimeSelectionHint('Thinking was reset for the selected provider.')
-      }
 
       return {
         ...current,
@@ -408,52 +358,6 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
       }
     })
   }, [resetRuntimeFeedback, runtimeCatalog])
-
-  const handleRuntimeModelChange = useCallback((nextModelId: string) => {
-    setRuntimeDraft((current) => {
-      if (!current) {
-        return current
-      }
-
-      resetRuntimeFeedback()
-
-      const nextThinkingOptions = getManagerSettingsAllowedThinkingLevels(runtimeCatalog, current.provider, nextModelId)
-      const defaultThinkingLevel = getManagerSettingsDefaultThinkingLevel(runtimeCatalog, current.provider, nextModelId)
-      const fallbackThinkingLevel =
-        (defaultThinkingLevel && nextThinkingOptions.includes(defaultThinkingLevel)
-          ? defaultThinkingLevel
-          : nextThinkingOptions[0]) ?? current.thinkingLevel
-
-      const nextThinkingLevel = nextThinkingOptions.includes(current.thinkingLevel)
-        ? current.thinkingLevel
-        : fallbackThinkingLevel
-
-      if (nextThinkingLevel !== current.thinkingLevel) {
-        setRuntimeSelectionHint('Thinking was reset for the selected model.')
-      }
-
-      return {
-        ...current,
-        modelId: nextModelId,
-        thinkingLevel: nextThinkingLevel,
-      }
-    })
-  }, [resetRuntimeFeedback, runtimeCatalog])
-
-  const handleRuntimeThinkingChange = useCallback((nextThinkingLevel: ThinkingLevel) => {
-    setRuntimeDraft((current) => {
-      if (!current) {
-        return current
-      }
-
-      resetRuntimeFeedback()
-
-      return {
-        ...current,
-        thinkingLevel: nextThinkingLevel,
-      }
-    })
-  }, [resetRuntimeFeedback])
 
   const resetSpawnFeedback = useCallback(() => {
     setSpawnSaveError(null)
@@ -652,7 +556,6 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
       }
 
       setRuntimeDraft(toManagerRuntimeDraft(result.manager))
-      setRuntimeSelectionHint(null)
       setRuntimeSaveSuccess(
         result.resetApplied
           ? 'Manager settings saved. Runtime was reset.'
@@ -1006,7 +909,7 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
 
       <SettingsSection
         label="Manager Runtime"
-        description="Configure explicit model descriptor settings for existing managers. Model and thinking level can also be changed from the chat input toolbar."
+        description="Configure provider and prompt override for existing managers. Model and thinking level can be changed from the chat input toolbar."
       >
         {managerOptions.length === 0 ? (
           <SettingsWithCTA
@@ -1064,50 +967,6 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
             </SettingsWithCTA>
 
             <SettingsWithCTA
-              label="Model"
-              description="Available models depend on selected provider"
-            >
-              <Select
-                value={runtimeDraft?.modelId ?? ''}
-                onValueChange={handleRuntimeModelChange}
-                disabled={isSavingRuntimeSettings || isLoadingRuntimeCatalog || !runtimeDraft || runtimeModelOptions.length === 0}
-              >
-                <SelectTrigger aria-label="Manager runtime model" className="w-full sm:w-72">
-                  <SelectValue placeholder="Select model" />
-                </SelectTrigger>
-                <SelectContent>
-                  {runtimeModelOptions.map((option) => (
-                    <SelectItem key={`${runtimeDraft?.provider ?? 'provider'}:${option.value}`} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </SettingsWithCTA>
-
-            <SettingsWithCTA
-              label="Thinking"
-              description="Available levels depend on selected provider and model"
-            >
-              <Select
-                value={runtimeDraft?.thinkingLevel ?? ''}
-                onValueChange={(value) => handleRuntimeThinkingChange(value as ThinkingLevel)}
-                disabled={isSavingRuntimeSettings || isLoadingRuntimeCatalog || !runtimeDraft || runtimeThinkingOptions.length === 0}
-              >
-                <SelectTrigger aria-label="Manager runtime thinking" className="w-full sm:w-72">
-                  <SelectValue placeholder="Select thinking" />
-                </SelectTrigger>
-                <SelectContent>
-                  {runtimeThinkingOptions.map((thinkingLevel) => (
-                    <SelectItem key={thinkingLevel} value={thinkingLevel}>
-                      {thinkingLevel}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </SettingsWithCTA>
-
-            <SettingsWithCTA
               label="Prompt override"
               description="Set an explicit manager prompt. Leave empty to clear override on save."
               direction="col"
@@ -1137,10 +996,6 @@ export function SettingsGeneral({ wsUrl, managers, onUpdateManager }: SettingsGe
                 </div>
               </div>
             </SettingsWithCTA>
-
-            {runtimeSelectionHint ? (
-              <p className="text-[11px] text-muted-foreground">{runtimeSelectionHint}</p>
-            ) : null}
 
             {isLoadingRuntimeCatalog ? (
               <p className="text-[11px] text-muted-foreground">Loading runtime model catalog...</p>

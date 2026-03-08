@@ -416,7 +416,7 @@ describe('SettingsGeneral', () => {
     ).toBeTruthy()
   })
 
-  it('renders runtime descriptor options from dynamic catalog and updates thinking options when model changes', async () => {
+  it('renders runtime provider options from dynamic catalog (model and thinking are in the composer)', async () => {
     const manager = createManager(
       'manager-a',
       'Manager A',
@@ -446,16 +446,9 @@ describe('SettingsGeneral', () => {
       'OpenAI Codex',
       'Anthropic',
     ])
-    fireEvent.click(await screen.findByRole('option', { name: 'OpenAI Codex' }))
 
-    const modelSelect = screen.getByRole('combobox', { name: 'Manager runtime model' })
-    fireEvent.click(modelSelect)
-    fireEvent.click(await screen.findByRole('option', { name: 'gpt-5.3-mini' }))
-
-    const thinkingSelect = screen.getByRole('combobox', { name: 'Manager runtime thinking' })
-    fireEvent.click(thinkingSelect)
-    const thinkingOptions = await screen.findAllByRole('option')
-    expect(thinkingOptions.map((option) => option.textContent?.trim())).toEqual(['off', 'low'])
+    expect(screen.queryByRole('combobox', { name: 'Manager runtime model' })).toBeNull()
+    expect(screen.queryByRole('combobox', { name: 'Manager runtime thinking' })).toBeNull()
   })
 
   it('blocks runtime save when stale thinking level is no longer supported by selected model', async () => {

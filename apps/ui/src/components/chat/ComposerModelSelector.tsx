@@ -85,7 +85,7 @@ export function ComposerModelSelector({
             )}
             disabled={isDisabled}
           >
-            <span className="max-w-[80px] truncate">{displayModelLabel}</span>
+            <span>{displayModelLabel}</span>
             <ChevronDown className="size-2.5 shrink-0 opacity-60" />
           </Button>
         </DropdownMenuTrigger>

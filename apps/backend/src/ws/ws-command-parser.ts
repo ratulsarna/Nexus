@@ -401,6 +401,46 @@ export function parseClientCommand(raw: RawData): ParsedClientCommand {
     };
   }
 
+  if (maybe.type === "update_agent_model") {
+    const agentId = (maybe as { agentId?: unknown }).agentId;
+    const modelId = (maybe as { modelId?: unknown }).modelId;
+    const thinkingLevel = (maybe as { thinkingLevel?: unknown }).thinkingLevel;
+    const requestId = (maybe as { requestId?: unknown }).requestId;
+
+    if (typeof agentId !== "string" || agentId.trim().length === 0) {
+      return { ok: false, error: "update_agent_model.agentId must be a non-empty string" };
+    }
+    if (modelId !== undefined && (typeof modelId !== "string" || modelId.trim().length === 0)) {
+      return { ok: false, error: "update_agent_model.modelId must be a non-empty string when provided" };
+    }
+    if (thinkingLevel !== undefined && !isThinkingLevel(thinkingLevel)) {
+      return {
+        ok: false,
+        error: `update_agent_model.thinkingLevel must be one of ${describeThinkingLevels()}`
+      };
+    }
+    if (modelId === undefined && thinkingLevel === undefined) {
+      return {
+        ok: false,
+        error: "update_agent_model must include at least one of modelId|thinkingLevel"
+      };
+    }
+    if (requestId !== undefined && typeof requestId !== "string") {
+      return { ok: false, error: "update_agent_model.requestId must be a string when provided" };
+    }
+
+    return {
+      ok: true,
+      command: {
+        type: "update_agent_model",
+        agentId: agentId.trim(),
+        modelId: typeof modelId === "string" ? modelId.trim() : undefined,
+        thinkingLevel: thinkingLevel as ThinkingLevel | undefined,
+        requestId
+      }
+    };
+  }
+
   return { ok: false, error: "Unknown command type" };
 }
 
@@ -409,6 +449,7 @@ export function extractRequestId(command: ClientCommand): string | undefined {
     case "create_manager":
     case "delete_manager":
     case "update_manager":
+    case "update_agent_model":
     case "stop_all_agents":
     case "list_directories":
     case "validate_directory":
