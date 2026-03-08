@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, CircleDashed, Settings, SquarePen, UserStar, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, CircleDashed, RotateCw, Settings, SquarePen, UserStar, X } from 'lucide-react'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { useEffect, useRef, useState } from 'react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -19,6 +19,7 @@ interface AgentSidebarProps {
   onSelectAgent: (agentId: string) => void
   onDeleteAgent: (agentId: string) => void
   onDeleteManager: (managerId: string) => void
+  onRestartManager?: (managerId: string) => void
   onOpenSettings: () => void
 }
 
@@ -79,10 +80,12 @@ function getModelLabel(agent: AgentDescriptor, preset: ManagerModelPreset | unde
 function AgentActivitySlot({
   isActive,
   isSelected,
+  status,
   streamingWorkerCount,
 }: {
   isActive: boolean
   isSelected: boolean
+  status?: AgentStatus
   streamingWorkerCount?: number
 }) {
   // When collapsed with active workers, show CircleDashed spinner with count inside
@@ -120,6 +123,14 @@ function AgentActivitySlot({
     )
   }
 
+  if (status === 'terminated' || status === 'stopped') {
+    return (
+      <span className="inline-flex size-3.5 shrink-0 items-center justify-center" aria-label={status}>
+        <span className="size-1.5 rounded-full bg-destructive/60" />
+      </span>
+    )
+  }
+
   if (!isActive) {
     return <span className="inline-block size-3.5 shrink-0" aria-hidden="true" />
   }
@@ -141,6 +152,7 @@ function AgentRow({
   isSelected,
   onSelect,
   onDelete,
+  onRestart,
   className,
   nameClassName,
   streamingWorkerCount,
@@ -150,12 +162,14 @@ function AgentRow({
   isSelected: boolean
   onSelect: () => void
   onDelete: () => void
+  onRestart?: () => void
   className: string
   nameClassName?: string
   streamingWorkerCount?: number
 }) {
   const title = agent.displayName || agent.agentId
   const isActive = liveStatus.status === 'streaming'
+  const isNonRunning = liveStatus.status === 'terminated' || liveStatus.status === 'stopped'
   const preset = inferModelPreset(agent)
   const modelLabel = getModelLabel(agent, preset)
   const modelDescription = `${agent.model.provider}/${agent.model.modelId}`
@@ -169,6 +183,7 @@ function AgentRow({
             isSelected
               ? 'border-l-2 border-primary bg-sidebar-accent text-sidebar-accent-foreground'
               : 'border-l-2 border-transparent text-sidebar-foreground/90 hover:bg-sidebar-accent/50',
+            isNonRunning ? 'opacity-50' : '',
             className,
           )}
         >
@@ -178,7 +193,7 @@ function AgentRow({
             className="flex min-w-0 flex-1 items-center gap-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/60"
             title={title}
           >
-            <AgentActivitySlot isActive={isActive} isSelected={isSelected} streamingWorkerCount={streamingWorkerCount} />
+            <AgentActivitySlot isActive={isActive} isSelected={isSelected} status={liveStatus.status} streamingWorkerCount={streamingWorkerCount} />
             <span className={cn('min-w-0 flex-1 truncate text-sm leading-5', nameClassName)}>{title}</span>
 
             <TooltipProvider delayDuration={200}>
@@ -203,6 +218,12 @@ function AgentRow({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
+        {isNonRunning && onRestart ? (
+          <ContextMenuItem onClick={onRestart}>
+            <RotateCw className="mr-2 size-3.5" />
+            Restart
+          </ContextMenuItem>
+        ) : null}
         <ContextMenuItem variant="destructive" onClick={onDelete}>
           Delete
         </ContextMenuItem>
@@ -223,6 +244,7 @@ export function AgentSidebar({
   onSelectAgent,
   onDeleteAgent,
   onDeleteManager,
+  onRestartManager,
   onOpenSettings,
 }: AgentSidebarProps) {
   const { managerRows, orphanWorkers } = buildManagerTreeRows(agents)
@@ -371,6 +393,7 @@ export function AgentSidebar({
                       isSelected={managerIsSelected}
                       onSelect={() => handleSelectAgent(manager.agentId)}
                       onDelete={() => onDeleteManager(manager.agentId)}
+                      onRestart={onRestartManager ? () => onRestartManager(manager.agentId) : undefined}
                       nameClassName="font-semibold"
                       className="min-w-0 flex-1 py-1.5 pl-7 pr-1.5"
                       streamingWorkerCount={managerIsCollapsed ? streamingWorkerCount : undefined}

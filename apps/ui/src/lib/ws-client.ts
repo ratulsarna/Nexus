@@ -70,6 +70,7 @@ type WsRequestResultMap = {
   update_manager: UpdateManagerResult
   update_agent_model: UpdateAgentModelResult
   delete_manager: { managerId: string }
+  restart_manager: AgentDescriptor
   interrupt_agent: { agentId: string; managerId: string; interrupted: boolean }
   stop_all_agents: { managerId: string; stoppedWorkerIds: string[]; managerStopped: boolean }
   list_directories: DirectoriesListedResult
@@ -83,6 +84,7 @@ const WS_REQUEST_TYPES: WsRequestType[] = [
   'update_manager',
   'update_agent_model',
   'delete_manager',
+  'restart_manager',
   'interrupt_agent',
   'stop_all_agents',
   'list_directories',
@@ -95,6 +97,7 @@ const WS_REQUEST_ERROR_HINTS: Array<{ requestType: WsRequestType; codeFragment: 
   { requestType: 'update_manager', codeFragment: 'update_manager' },
   { requestType: 'update_agent_model', codeFragment: 'update_agent_model' },
   { requestType: 'delete_manager', codeFragment: 'delete_manager' },
+  { requestType: 'restart_manager', codeFragment: 'restart_manager' },
   { requestType: 'interrupt_agent', codeFragment: 'interrupt_agent' },
   { requestType: 'stop_all_agents', codeFragment: 'stop_all_agents' },
   { requestType: 'list_directories', codeFragment: 'list_directories' },
@@ -427,6 +430,23 @@ export class ManagerWsClient {
     }))
   }
 
+  async restartManager(managerId: string): Promise<AgentDescriptor> {
+    const trimmed = managerId.trim()
+    if (!trimmed) {
+      throw new Error('Manager id is required.')
+    }
+
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      throw new Error('WebSocket is disconnected. Reconnecting...')
+    }
+
+    return this.enqueueRequest('restart_manager', (requestId) => ({
+      type: 'restart_manager',
+      managerId: trimmed,
+      requestId,
+    }))
+  }
+
   async deleteManager(managerId: string): Promise<{ managerId: string }> {
     const trimmed = managerId.trim()
     if (!trimmed) {
@@ -654,6 +674,12 @@ export class ManagerWsClient {
         this.requestTracker.resolve('update_agent_model', event.requestId, {
           agent: event.agent,
         })
+        break
+      }
+
+      case 'manager_restarted': {
+        this.applyManagerUpdated(event.manager)
+        this.requestTracker.resolve('restart_manager', event.requestId, event.manager)
         break
       }
 

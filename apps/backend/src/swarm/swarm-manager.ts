@@ -205,6 +205,7 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
 
   private readonly descriptors = new Map<string, AgentDescriptor>();
   private readonly runtimes = new Map<string, SwarmAgentRuntime>();
+  private readonly restartingManagerIds = new Set<string>();
   private readonly conversationEntriesByAgentId = new Map<string, ConversationEntryEvent[]>();
   private readonly crossManagerMessageLog = new Map<string, number[]>();
   private readonly conversationProjector: ConversationProjector;
@@ -1665,6 +1666,91 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
     });
   }
 
+  async restartManager(
+    callerAgentId: string,
+    managerId: string
+  ): Promise<AgentDescriptor> {
+    const descriptor = this.getRequiredManagerDescriptor(managerId);
+
+    this.logDebug("manager:restart:start", {
+      callerAgentId,
+      managerId,
+      currentStatus: descriptor.status
+    });
+
+    // No-op if already idle with a live runtime
+    if (descriptor.status === "idle" && this.runtimes.has(managerId)) {
+      return cloneDescriptor(descriptor);
+    }
+
+    // Guard against concurrent restarts of the same manager
+    if (this.restartingManagerIds.has(managerId)) {
+      this.logDebug("manager:restart:already-in-progress", { managerId });
+      throw new Error("A restart is already in progress for this manager.");
+    }
+
+    this.restartingManagerIds.add(managerId);
+    try {
+      // Clean up stale runtime (if any)
+      const existingRuntime = this.runtimes.get(managerId);
+      if (existingRuntime) {
+        await existingRuntime.terminate({ abort: true });
+        this.runtimes.delete(managerId);
+      }
+
+      // Transition to idle in-memory (not yet persisted — deferred until
+      // runtime creation succeeds to avoid leaving a broken idle descriptor)
+      const previousStatus = descriptor.status;
+      descriptor.status = transitionAgentStatus(descriptor.status, "idle");
+      descriptor.contextUsage = undefined;
+      descriptor.updatedAt = this.now();
+      this.descriptors.set(managerId, descriptor);
+
+      // Create fresh runtime — Codex will resume thread from persisted state
+      let runtime: SwarmAgentRuntime;
+      try {
+        runtime = await this.createRuntimeForDescriptor(
+          descriptor,
+          this.resolveSystemPromptForDescriptor(descriptor)
+        );
+      } catch (err) {
+        // Roll back in-memory status so the manager stays visibly crashed
+        descriptor.status = previousStatus;
+        descriptor.updatedAt = this.now();
+        this.descriptors.set(managerId, descriptor);
+        throw err;
+      }
+
+      // Guard against concurrent runtime installation (e.g. handleUserMessage
+      // saw idle status during the await above and called getOrCreateRuntimeForDescriptor)
+      const concurrentRuntime = this.runtimes.get(managerId);
+      if (concurrentRuntime) {
+        await runtime.terminate({ abort: true });
+        descriptor.contextUsage = concurrentRuntime.getContextUsage();
+      } else {
+        this.runtimes.set(managerId, runtime);
+        descriptor.contextUsage = runtime.getContextUsage();
+      }
+
+      // Persist only after runtime is successfully created
+      await this.saveStore();
+
+      // Do NOT emit conversation_reset — history is preserved
+      const activeRuntime = concurrentRuntime ?? runtime;
+      this.emitStatus(managerId, descriptor.status, activeRuntime.getPendingCount(), descriptor.contextUsage);
+      this.emitAgentsSnapshot();
+
+      this.logDebug("manager:restart:ready", {
+        callerAgentId,
+        managerId
+      });
+
+      return cloneDescriptor(descriptor);
+    } finally {
+      this.restartingManagerIds.delete(managerId);
+    }
+  }
+
   getConfig(): SwarmConfig {
     return this.config;
   }
@@ -2232,6 +2318,13 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
     const descriptor = this.descriptors.get(agentId);
     if (!descriptor) return;
 
+    // During restart, stale runtime callbacks (e.g. terminated from a duplicate
+    // being cleaned up) would undo the restart's state transitions and evict
+    // the replacement runtime. Skip entirely — restartManager manages its own state.
+    if (this.restartingManagerIds.has(agentId)) {
+      return;
+    }
+
     const normalizedContextUsage = normalizeContextUsage(contextUsage);
     let shouldPersist = false;
 
@@ -2246,9 +2339,13 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
       shouldPersist = true;
     }
 
-    if (isNonRunningAgentStatus(nextStatus) && descriptor.contextUsage) {
-      descriptor.contextUsage = undefined;
-      shouldPersist = true;
+    if (isNonRunningAgentStatus(nextStatus)) {
+      this.runtimes.delete(agentId);
+
+      if (descriptor.contextUsage) {
+        descriptor.contextUsage = undefined;
+        shouldPersist = true;
+      }
     }
 
     this.descriptors.set(agentId, descriptor);

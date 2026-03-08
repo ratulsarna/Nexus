@@ -197,6 +197,8 @@ export function IndexPage() {
     handleRequestDeleteManager,
     handleConfirmDeleteManager,
     handleCloseDeleteManagerDialog,
+    isRestartingManager,
+    handleRestartManager,
     isCompactingManager,
     handleCompactManager,
     isStoppingAllAgents,
@@ -436,6 +438,9 @@ export function IndexPage() {
           onSelectAgent={handleSelectAgent}
           onDeleteAgent={handleDeleteAgent}
           onDeleteManager={handleRequestDeleteManager}
+          onRestartManager={(managerId) => {
+            void handleRestartManager(managerId)
+          }}
           onOpenSettings={handleOpenSettingsPanel}
         />
 
@@ -485,6 +490,13 @@ export function IndexPage() {
                   onStopAll={() => void handleStopAllAgents()}
                   showNewChat={isActiveManager}
                   onNewChat={handleNewChat}
+                  showRestart={isActiveManager && (activeAgentStatus === 'terminated' || activeAgentStatus === 'stopped')}
+                  restartInProgress={isRestartingManager}
+                  onRestart={() => {
+                    if (activeAgentId) {
+                      void handleRestartManager(activeAgentId)
+                    }
+                  }}
                   isArtifactsPanelOpen={isArtifactsPanelOpen}
                   onToggleArtifactsPanel={handleToggleArtifactsPanel}
                   onToggleMobileSidebar={() =>

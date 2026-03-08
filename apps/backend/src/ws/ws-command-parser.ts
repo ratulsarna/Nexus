@@ -194,6 +194,27 @@ export function parseClientCommand(raw: RawData): ParsedClientCommand {
     };
   }
 
+  if (maybe.type === "restart_manager") {
+    const managerId = (maybe as { managerId?: unknown }).managerId;
+    const requestId = (maybe as { requestId?: unknown }).requestId;
+
+    if (typeof managerId !== "string" || managerId.trim().length === 0) {
+      return { ok: false, error: "restart_manager.managerId must be a non-empty string" };
+    }
+    if (requestId !== undefined && typeof requestId !== "string") {
+      return { ok: false, error: "restart_manager.requestId must be a string when provided" };
+    }
+
+    return {
+      ok: true,
+      command: {
+        type: "restart_manager",
+        managerId: managerId.trim(),
+        requestId
+      }
+    };
+  }
+
   if (maybe.type === "update_manager") {
     const managerId = (maybe as { managerId?: unknown }).managerId;
     const model = (maybe as { model?: unknown }).model;
@@ -469,6 +490,7 @@ export function extractRequestId(command: ClientCommand): string | undefined {
   switch (command.type) {
     case "create_manager":
     case "delete_manager":
+    case "restart_manager":
     case "update_manager":
     case "update_agent_model":
     case "interrupt_agent":
