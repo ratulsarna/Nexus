@@ -629,7 +629,7 @@ function ToolExecutionLogRow({ entry }: { entry: ToolExecutionDisplayEntry }) {
               <span>{formatTimestamp(entry.timestamp)}</span>
               {actorLabel ? <span>• {actorLabel}</span> : null}
               {entry.toolName ? <span>• {entry.toolName}</span> : null}
-              {entry.toolCallId ? <span>• {entry.toolCallId}</span> : null}
+
             </div>
           </div>
         </div>

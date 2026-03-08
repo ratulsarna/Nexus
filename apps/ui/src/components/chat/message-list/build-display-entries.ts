@@ -28,6 +28,11 @@ export type MessageListDisplayEntry =
       id: string
       entry: ConversationLogEntry
     }
+  | {
+      type: 'tool_execution_group'
+      id: string
+      entries: ToolExecutionDisplayEntry[]
+    }
 
 function isToolExecutionLog(entry: ConversationLogEntry): entry is ToolExecutionLogEntry {
   return (
@@ -188,5 +193,40 @@ export function buildDisplayEntries(messages: ConversationEntry[]): MessageListD
     }
   }
 
-  return displayEntries
+  return groupConsecutiveToolExecutions(displayEntries)
+}
+
+function groupConsecutiveToolExecutions(
+  entries: MessageListDisplayEntry[],
+): MessageListDisplayEntry[] {
+  const result: MessageListDisplayEntry[] = []
+  let pendingToolEntries: Array<Extract<MessageListDisplayEntry, { type: 'tool_execution' }>> = []
+
+  function flushPending() {
+    if (pendingToolEntries.length === 0) return
+
+    if (pendingToolEntries.length === 1) {
+      result.push(pendingToolEntries[0])
+    } else {
+      result.push({
+        type: 'tool_execution_group',
+        id: `tool-group-${pendingToolEntries[0].id}`,
+        entries: pendingToolEntries.map((e) => e.entry),
+      })
+    }
+
+    pendingToolEntries = []
+  }
+
+  for (const entry of entries) {
+    if (entry.type === 'tool_execution') {
+      pendingToolEntries.push(entry)
+    } else {
+      flushPending()
+      result.push(entry)
+    }
+  }
+
+  flushPending()
+  return result
 }

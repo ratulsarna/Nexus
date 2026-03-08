@@ -167,8 +167,8 @@ function AgentRow({
           className={cn(
             'flex w-full items-center gap-1 rounded-md transition-colors',
             isSelected
-              ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-              : 'text-sidebar-foreground/90 hover:bg-sidebar-accent/50',
+              ? 'border-l-2 border-primary bg-sidebar-accent text-sidebar-accent-foreground'
+              : 'border-l-2 border-transparent text-sidebar-foreground/90 hover:bg-sidebar-accent/50',
             className,
           )}
         >

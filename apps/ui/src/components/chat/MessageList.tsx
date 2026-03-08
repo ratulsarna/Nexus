@@ -8,6 +8,7 @@ import { AgentMessageRow } from './message-list/AgentMessageRow'
 import { buildDisplayEntries } from './message-list/build-display-entries'
 import { ConversationMessageRow } from './message-list/ConversationMessageRow'
 import { EmptyState } from './message-list/EmptyState'
+import { ToolExecutionGroup } from './message-list/ToolExecutionGroup'
 import { ToolLogRow } from './message-list/ToolLogRow'
 
 interface MessageListProps {
@@ -157,6 +158,10 @@ export function MessageList({
 
             if (entry.type === 'agent_message') {
               return <AgentMessageRow key={entry.id} message={entry.message} />
+            }
+
+            if (entry.type === 'tool_execution_group') {
+              return <ToolExecutionGroup key={entry.id} entries={entry.entries} />
             }
 
             return (

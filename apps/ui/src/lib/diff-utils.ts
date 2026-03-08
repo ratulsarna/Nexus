@@ -136,7 +136,12 @@ function extractApplyPatchDiff(parsed: Record<string, unknown>): FileDiffData | 
   const patch = parsed.patch
   if (typeof patch !== 'string') return null
 
-  const patches = parsePatch(patch)
+  let patches: ReturnType<typeof parsePatch>
+  try {
+    patches = parsePatch(patch)
+  } catch {
+    return null
+  }
   if (patches.length === 0) return null
 
   const first = patches[0]

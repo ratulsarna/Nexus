@@ -467,10 +467,10 @@ describe('IndexPage create manager model selection', () => {
     click(getByRole(container, 'button', { name: 'All' }))
 
     expect(queryByText(container, 'owned worker chatter')).not.toBeNull()
-    expect(queryByText(container, /manager-call/)).not.toBeNull()
-    expect(queryByText(container, /owned-call/)).toBeNull()
+    expect(queryByText(container, /spawn_agent/)).not.toBeNull()
+    expect(queryByText(container, /README\.md/)).toBeNull()
     expect(queryByText(container, 'foreign worker chatter')).toBeNull()
-    expect(queryByText(container, /foreign-call/)).toBeNull()
+    expect(queryByText(container, /SECRET\.md/)).toBeNull()
   })
 
   it('shows workers in sidebar and sends messages to the selected worker thread', async () => {

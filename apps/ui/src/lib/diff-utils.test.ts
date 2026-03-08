@@ -151,4 +151,38 @@ describe('extractFileDiffData - edge cases', () => {
   it('returns null for array JSON', () => {
     expect(extractFileDiffData('write', '[1,2,3]')).toBeNull()
   })
+
+  it('does not crash when patch field contains non-diff content (e.g. raw markdown)', () => {
+    const payload = JSON.stringify({
+      path: '/docs/RAT-83.md',
+      patch: '---\ntitle: RAT-83\n---\n# RAT-83 Gate A Discovery\n\nSome content here.',
+    })
+
+    // Should not throw — malformed patches should be caught and fall through
+    expect(() => extractFileDiffData('file_change', payload)).not.toThrow()
+    // Should still return a result (falls through to extractWriteDiff or returns null)
+    const result = extractFileDiffData('file_change', payload)
+    // Result can be null (no content key) or a write diff — either is acceptable, just no crash
+    expect(result === null || result.filePath === '/docs/RAT-83.md').toBe(true)
+  })
+
+  it('does not crash when apply_patch receives non-diff content', () => {
+    const payload = JSON.stringify({
+      patch: '# RAT-83 Gate A Discovery\n\nThis is not a diff.',
+    })
+
+    expect(() => extractFileDiffData('apply_patch', payload)).not.toThrow()
+  })
+
+  it('does not crash when patch contains content that triggers parsePatch error', () => {
+    // Simulates a Codex file_change where the patch field has diff-like headers
+    // followed by non-diff content, causing parsePatch to throw "Unknown line"
+    const payload = JSON.stringify({
+      path: '/docs/RAT-83.md',
+      patch: '--- a/docs/RAT-83.md\n+++ b/docs/RAT-83.md\n@@ -1,3 +1,3 @@\n# RAT-83 Gate A Discovery',
+    })
+
+    expect(() => extractFileDiffData('apply_patch', payload)).not.toThrow()
+    expect(() => extractFileDiffData('file_change', payload)).not.toThrow()
+  })
 })

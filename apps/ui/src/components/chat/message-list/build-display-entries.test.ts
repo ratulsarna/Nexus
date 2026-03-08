@@ -2,6 +2,18 @@ import { describe, expect, it } from 'vitest'
 import type { ConversationEntry } from '@nexus/protocol'
 import { buildDisplayEntries } from './build-display-entries'
 import { PI_TOOL_CALL_ID_FIXTURES, piToolLogEvent } from './__fixtures__/pi-tool-events'
+import type { ToolExecutionDisplayEntry } from './types'
+
+/** Collect all ToolExecutionDisplayEntry items from display entries, unwrapping groups. */
+function collectToolDisplayEntries(
+  entries: ReturnType<typeof buildDisplayEntries>,
+): ToolExecutionDisplayEntry[] {
+  return entries.flatMap((entry) => {
+    if (entry.type === 'tool_execution') return [entry.entry]
+    if (entry.type === 'tool_execution_group') return entry.entries
+    return []
+  })
+}
 
 describe('buildDisplayEntries', () => {
   it('excludes non-callable labels from tool execution rows', () => {
@@ -47,8 +59,8 @@ describe('buildDisplayEntries', () => {
       }),
     ])
 
-    const toolEntries = entries.filter((entry) => entry.type === 'tool_execution')
-    expect(toolEntries).toHaveLength(2)
+    const toolDisplayEntries = collectToolDisplayEntries(entries)
+    expect(toolDisplayEntries).toHaveLength(2)
   })
 
   it('keeps pipe-separated toolCallId values distinct using full-id grouping', () => {
@@ -84,13 +96,10 @@ describe('buildDisplayEntries', () => {
     ]
 
     const entries = buildDisplayEntries(messages)
-    const toolEntries = entries.filter((entry) => entry.type === 'tool_execution')
-    expect(toolEntries).toHaveLength(2)
+    const toolDisplayEntries = collectToolDisplayEntries(entries)
+    expect(toolDisplayEntries).toHaveLength(2)
 
-    const callIds = toolEntries
-      .filter((entry): entry is Extract<typeof entry, { type: 'tool_execution' }> => entry.type === 'tool_execution')
-      .map((entry) => entry.entry.toolCallId)
-      .sort()
+    const callIds = toolDisplayEntries.map((e) => e.toolCallId).sort()
     expect(callIds).toEqual([PI_TOOL_CALL_ID_FIXTURES.pipeA, PI_TOOL_CALL_ID_FIXTURES.pipeB].sort())
   })
 
@@ -164,13 +173,11 @@ describe('buildDisplayEntries', () => {
     }))
 
     const entries = buildDisplayEntries(messages)
-    const toolEntries = entries.filter((entry) => entry.type === 'tool_execution')
-    expect(toolEntries).toHaveLength(toolNames.length)
+    const toolDisplayEntries = collectToolDisplayEntries(entries)
+    expect(toolDisplayEntries).toHaveLength(toolNames.length)
 
     const byToolName = new Map(
-      toolEntries
-        .filter((entry): entry is Extract<typeof entry, { type: 'tool_execution' }> => entry.type === 'tool_execution')
-        .map((entry) => [entry.entry.toolName, entry.entry]),
+      toolDisplayEntries.map((entry) => [entry.toolName, entry]),
     )
 
     expect(byToolName.get('command_execution')?.classification.category).toBe('shell')
@@ -205,13 +212,11 @@ describe('buildDisplayEntries', () => {
     }))
 
     const entries = buildDisplayEntries(messages)
-    const toolEntries = entries.filter((entry) => entry.type === 'tool_execution')
-    expect(toolEntries).toHaveLength(toolNames.length)
+    const toolDisplayEntries = collectToolDisplayEntries(entries)
+    expect(toolDisplayEntries).toHaveLength(toolNames.length)
 
     const byToolName = new Map(
-      toolEntries
-        .filter((entry): entry is Extract<typeof entry, { type: 'tool_execution' }> => entry.type === 'tool_execution')
-        .map((entry) => [entry.entry.toolName, entry.entry]),
+      toolDisplayEntries.map((entry) => [entry.toolName, entry]),
     )
 
     expect(byToolName.get('command_execution')?.classification.category).toBe('shell')
@@ -271,6 +276,120 @@ describe('buildDisplayEntries', () => {
       expect(toolEntry.entry.latestKind).toBe('tool_execution_end')
       expect(toolEntry.entry.toolName).toBe('exec_command')
       expect(toolEntry.entry.outputPayload).toContain('ok')
+    }
+  })
+})
+
+describe('tool execution grouping', () => {
+  it('groups 2+ consecutive tool_execution entries into a tool_execution_group', () => {
+    const messages: ConversationEntry[] = [
+      piToolLogEvent({ toolCallId: 'call-a', toolName: 'exec_command', timestamp: '2026-03-03T10:00:00.000Z' }),
+      piToolLogEvent({ toolCallId: 'call-b', toolName: 'exec_command', timestamp: '2026-03-03T10:00:01.000Z' }),
+      piToolLogEvent({ toolCallId: 'call-c', toolName: 'exec_command', timestamp: '2026-03-03T10:00:02.000Z' }),
+    ]
+
+    const entries = buildDisplayEntries(messages)
+    expect(entries).toHaveLength(1)
+    expect(entries[0].type).toBe('tool_execution_group')
+
+    if (entries[0].type === 'tool_execution_group') {
+      expect(entries[0].entries).toHaveLength(3)
+    }
+  })
+
+  it('does not group a single tool_execution entry', () => {
+    const messages: ConversationEntry[] = [
+      piToolLogEvent({ toolCallId: 'call-solo', toolName: 'exec_command', timestamp: '2026-03-03T10:00:00.000Z' }),
+    ]
+
+    const entries = buildDisplayEntries(messages)
+    expect(entries).toHaveLength(1)
+    expect(entries[0].type).toBe('tool_execution')
+  })
+
+  it('does not group tool_execution entries separated by a conversation_message', () => {
+    const messages: ConversationEntry[] = [
+      piToolLogEvent({ toolCallId: 'call-1', toolName: 'exec_command', timestamp: '2026-03-03T10:00:00.000Z' }),
+      {
+        type: 'conversation_message',
+        agentId: 'manager',
+        timestamp: '2026-03-03T10:00:01.000Z',
+        role: 'assistant',
+        text: 'thinking...',
+      } as ConversationEntry,
+      piToolLogEvent({ toolCallId: 'call-2', toolName: 'exec_command', timestamp: '2026-03-03T10:00:02.000Z' }),
+    ]
+
+    const entries = buildDisplayEntries(messages)
+    const toolTypes = entries
+      .filter((e) => e.type === 'tool_execution' || e.type === 'tool_execution_group')
+      .map((e) => e.type)
+    expect(toolTypes).toEqual(['tool_execution', 'tool_execution'])
+  })
+
+  it('treats runtime_error_log as a group boundary', () => {
+    const messages: ConversationEntry[] = [
+      piToolLogEvent({ toolCallId: 'call-1', toolName: 'exec_command', timestamp: '2026-03-03T10:00:00.000Z' }),
+      piToolLogEvent({ toolCallId: 'call-2', toolName: 'exec_command', timestamp: '2026-03-03T10:00:01.000Z' }),
+      {
+        type: 'conversation_log',
+        agentId: 'manager',
+        timestamp: '2026-03-03T10:00:02.000Z',
+        source: 'runtime_log',
+        kind: 'message_end',
+        text: 'something broke',
+        isError: true,
+      } as ConversationEntry,
+      piToolLogEvent({ toolCallId: 'call-3', toolName: 'exec_command', timestamp: '2026-03-03T10:00:03.000Z' }),
+    ]
+
+    const entries = buildDisplayEntries(messages)
+    expect(entries[0].type).toBe('tool_execution_group')
+    expect(entries[1].type).toBe('runtime_error_log')
+    expect(entries[2].type).toBe('tool_execution')
+  })
+
+  it('does not double-wrap a single display entry from start/update/end events', () => {
+    const longId = PI_TOOL_CALL_ID_FIXTURES.long
+    const messages: ConversationEntry[] = [
+      {
+        type: 'agent_tool_call',
+        agentId: 'manager',
+        actorAgentId: 'worker-1',
+        timestamp: '2026-03-03T10:04:00.000Z',
+        kind: 'tool_execution_start',
+        toolName: 'artifacts',
+        toolCallId: longId,
+        text: '{"command":"create"}',
+      },
+      {
+        type: 'agent_tool_call',
+        agentId: 'manager',
+        actorAgentId: 'worker-1',
+        timestamp: '2026-03-03T10:04:02.000Z',
+        kind: 'tool_execution_end',
+        toolName: 'artifacts',
+        toolCallId: longId,
+        text: '{"done":true}',
+        isError: false,
+      },
+    ]
+
+    const entries = buildDisplayEntries(messages)
+    expect(entries).toHaveLength(1)
+    expect(entries[0].type).toBe('tool_execution')
+  })
+
+  it('assigns a stable group id based on first entry id', () => {
+    const messages: ConversationEntry[] = [
+      piToolLogEvent({ toolCallId: 'call-x', toolName: 'exec_command', timestamp: '2026-03-03T10:00:00.000Z' }),
+      piToolLogEvent({ toolCallId: 'call-y', toolName: 'exec_command', timestamp: '2026-03-03T10:00:01.000Z' }),
+    ]
+
+    const entries = buildDisplayEntries(messages)
+    expect(entries[0].type).toBe('tool_execution_group')
+    if (entries[0].type === 'tool_execution_group') {
+      expect(entries[0].id).toMatch(/^tool-group-/)
     }
   })
 })

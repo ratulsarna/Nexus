@@ -159,6 +159,11 @@ describe('ToolLogRow', () => {
     expect(html).toContain('Agent task cancelled')
   })
 
+  it('does not render the raw toolCallId in the metadata line', () => {
+    const html = renderToolRow({ toolCallId: 'call_oKC4f2LGNedMQMeS2TMDtBxU' })
+    expect(html).not.toContain('call_oKC4f2LGNedMQMeS2TMDtBxU')
+  })
+
   it('treats skipped tool outputs as cancelled', () => {
     const html = renderToolRow({
       category: 'file',

@@ -231,6 +231,40 @@ describe('AgentSidebar', () => {
     expect(onDeleteAgent).toHaveBeenCalledWith('worker-alpha')
   })
 
+  it('applies a left accent border to the selected agent row', () => {
+    renderSidebar({ agents: [manager('manager-alpha')], selectedAgentId: 'manager-alpha' })
+
+    const agentRow = getByText(sidebar(), 'manager-alpha').closest('[data-slot="context-menu-trigger"]') as HTMLElement
+    const rowDiv = agentRow?.querySelector('.border-l-2') ?? (agentRow?.matches('.border-l-2') ? agentRow : null)
+    expect(rowDiv).toBeTruthy()
+    expect(rowDiv?.classList.contains('border-primary')).toBe(true)
+  })
+
+  it('does not apply left accent border to unselected agent rows', () => {
+    renderSidebar({
+      agents: [manager('manager-alpha'), manager('manager-beta')],
+      selectedAgentId: 'manager-beta',
+    })
+
+    const alphaRow = getByText(sidebar(), 'manager-alpha').closest('[data-slot="context-menu-trigger"]') as HTMLElement
+    const rowDiv = alphaRow?.querySelector('.border-primary') ?? (alphaRow?.matches('.border-primary') ? alphaRow : null)
+    expect(rowDiv).toBeNull()
+  })
+
+  it('does not highlight any agent when settings is active', () => {
+    renderSidebar({
+      agents: [manager('manager-alpha')],
+      selectedAgentId: 'manager-alpha',
+      isSettingsActive: true,
+    })
+
+    const allTriggers = sidebar().querySelectorAll('[data-slot="context-menu-trigger"]')
+    const anyWithPrimary = Array.from(allTriggers).some(
+      (el) => el.matches('.border-primary') || el.querySelector('.border-primary'),
+    )
+    expect(anyWithPrimary).toBe(false)
+  })
+
   it('calls onOpenSettings when the settings button is clicked', () => {
     const onOpenSettings = vi.fn()
 
