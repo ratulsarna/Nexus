@@ -2079,7 +2079,7 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
 
       const usageBefore = runtime.getContextUsage();
       expect(usageBefore).toBeDefined();
-      expect(usageBefore!.tokens).toBe(100_000);
+      expect(usageBefore!.tokens).toBe(105_000);
 
       await runtime.compact("summarize key decisions");
 
@@ -2088,14 +2088,14 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
 
       const usageAfter = runtime.getContextUsage();
       expect(usageAfter).toBeDefined();
-      expect(usageAfter!.tokens).toBe(10_000);
+      expect(usageAfter!.tokens).toBe(10_500);
       expect(usageAfter!.tokens).toBeLessThan(usageBefore!.tokens);
       expect(sdkMockState.closeCalls).toBe(0);
 
       await runtime.terminate({ abort: true });
     });
 
-    it("tracks live prompt occupancy from input_tokens only", async () => {
+    it("tracks live context occupancy from Claude usage totals", async () => {
       sdkMockState.streams.push([
         {
           type: "result",
@@ -2133,7 +2133,7 @@ describe("ClaudeAgentSdkRuntime behavior", () => {
       await waitFor(() => runtime.getStatus() === "idle");
 
       expect(runtime.getContextUsage()).toMatchObject({
-        tokens: 12_345,
+        tokens: 25_134,
         contextWindow: 200_000,
       });
 

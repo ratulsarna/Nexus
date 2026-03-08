@@ -817,6 +817,270 @@ describe('SwarmManager', () => {
     expect(toolLogs[1].isError).toBe(false)
   })
 
+  it('auto-repairs silent manager turns after tool activity by prompting a speak_to_user follow-up', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    await manager.handleUserMessage('look this up for me')
+
+    const managerRuntime = manager.runtimeByAgentId.get('manager')
+    expect(managerRuntime).toBeDefined()
+    expect(managerRuntime?.sendCalls).toHaveLength(1)
+
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'turn_start',
+    })
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'tool_execution_start',
+      toolName: 'web_search',
+      toolCallId: 'web-1',
+      args: { query: 'Nexus bug' },
+    })
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'tool_execution_end',
+      toolName: 'web_search',
+      toolCallId: 'web-1',
+      result: { ok: true },
+      isError: false,
+    })
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'turn_end',
+      toolResults: [],
+    })
+
+    expect(managerRuntime?.sendCalls).toHaveLength(2)
+    expect(managerRuntime?.sendCalls[1]?.delivery).toBe('auto')
+
+    const repairMessage = managerRuntime?.sendCalls[1]?.message
+    const repairText = typeof repairMessage === 'string' ? repairMessage : repairMessage?.text ?? ''
+    expect(repairText).toContain('never called speak_to_user')
+    expect(repairText).toContain('"channel":"web"')
+
+    const history = manager.getConversationHistory('manager')
+    expect(
+      history.some(
+        (entry) =>
+          entry.type === 'conversation_message' &&
+          entry.role === 'system' &&
+          entry.text.includes('never published a user-visible reply'),
+      ),
+    ).toBe(false)
+  })
+
+  it('queues a manager reply expectation for busy steer deliveries when no tracking exists', async () => {
+    const config = await makeTempConfig()
+    config.defaultModel = {
+      provider: 'openai-codex-app-server',
+      modelId: 'gpt-5.4',
+      thinkingLevel: 'high',
+    }
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const managerRuntime = manager.runtimeByAgentId.get('manager')
+    expect(managerRuntime).toBeDefined()
+    managerRuntime!.busy = true
+
+    await manager.handleUserMessage('follow up while busy')
+
+    const state = manager as unknown as {
+      pendingManagerReplyExpectations: Map<string, unknown[]>
+    }
+
+    expect(managerRuntime?.sendCalls).toHaveLength(1)
+    expect(state.pendingManagerReplyExpectations.get('manager') ?? []).toHaveLength(1)
+  })
+
+  it('does not duplicate manager reply expectations for busy steer deliveries when an active turn is already tracked', async () => {
+    const config = await makeTempConfig()
+    config.defaultModel = {
+      provider: 'openai-codex-app-server',
+      modelId: 'gpt-5.4',
+      thinkingLevel: 'high',
+    }
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const managerRuntime = manager.runtimeByAgentId.get('manager')
+    expect(managerRuntime).toBeDefined()
+    managerRuntime!.busy = true
+
+    const state = manager as unknown as {
+      activeManagerTurns: Map<string, unknown>
+      pendingManagerReplyExpectations: Map<string, unknown[]>
+    }
+    state.activeManagerTurns.set('manager', {
+      sourceContext: { channel: 'web' },
+      queuedAt: '2026-01-01T00:00:00.000Z',
+      recoveryAttempt: 0,
+      startedAt: '2026-01-01T00:00:00.000Z',
+      hadAssistantActivity: false,
+      hadToolActivity: false,
+      publishedToUser: false,
+    })
+
+    await manager.handleUserMessage('follow up while busy')
+
+    expect(managerRuntime?.sendCalls).toHaveLength(1)
+    expect(state.pendingManagerReplyExpectations.get('manager') ?? []).toHaveLength(0)
+  })
+
+  it('does not auto-repair manager turns that already published speak_to_user', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    await manager.handleUserMessage('look this up for me')
+
+    const managerRuntime = manager.runtimeByAgentId.get('manager')
+    expect(managerRuntime).toBeDefined()
+    expect(managerRuntime?.sendCalls).toHaveLength(1)
+
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'turn_start',
+    })
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'tool_execution_start',
+      toolName: 'web_search',
+      toolCallId: 'web-1',
+      args: { query: 'Nexus bug' },
+    })
+    await manager.publishToUser('manager', 'Here is the answer.', 'speak_to_user')
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'turn_end',
+      toolResults: [],
+    })
+
+    expect(managerRuntime?.sendCalls).toHaveLength(1)
+
+    const history = manager.getConversationHistory('manager')
+    expect(
+      history.some(
+        (entry) =>
+          entry.type === 'conversation_message' &&
+          entry.role === 'assistant' &&
+          entry.source === 'speak_to_user' &&
+          entry.text === 'Here is the answer.',
+      ),
+    ).toBe(true)
+  })
+
+  it('preserves manager reply tracking for recoverable compaction runtime errors', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    await manager.handleUserMessage('compact and continue')
+
+    const state = manager as unknown as {
+      pendingManagerReplyExpectations: Map<string, unknown[]>
+    }
+
+    expect(state.pendingManagerReplyExpectations.get('manager') ?? []).toHaveLength(1)
+
+    await (manager as any).handleRuntimeError('manager', {
+      phase: 'compaction',
+      message: 'compaction failed but can continue',
+    })
+
+    expect(state.pendingManagerReplyExpectations.get('manager') ?? []).toHaveLength(1)
+  })
+
+  it('surfaces a system warning when the silent-turn repair attempt is also silent', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    await manager.handleUserMessage('look this up for me')
+
+    const managerRuntime = manager.runtimeByAgentId.get('manager')
+    expect(managerRuntime).toBeDefined()
+
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'turn_start',
+    })
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'tool_execution_end',
+      toolName: 'web_search',
+      toolCallId: 'web-1',
+      result: { ok: true },
+      isError: false,
+    })
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'turn_end',
+      toolResults: [],
+    })
+
+    expect(managerRuntime?.sendCalls).toHaveLength(2)
+
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'turn_start',
+    })
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'message_update',
+      message: {
+        role: 'assistant',
+        content: 'Still thinking',
+      },
+    })
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'turn_end',
+      toolResults: [],
+    })
+
+    expect(managerRuntime?.sendCalls).toHaveLength(2)
+
+    const history = manager.getConversationHistory('manager')
+    expect(
+      history.some(
+        (entry) =>
+          entry.type === 'conversation_message' &&
+          entry.role === 'system' &&
+          entry.text.includes('never published a user-visible reply'),
+      ),
+    ).toBe(true)
+  })
+
+  it('does not trigger silent-turn repair for assistant message_end errors', async () => {
+    const config = await makeTempConfig()
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    await manager.handleUserMessage('look this up for me')
+
+    const managerRuntime = manager.runtimeByAgentId.get('manager')
+    expect(managerRuntime).toBeDefined()
+
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'turn_start',
+    })
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [],
+        stopReason: 'error',
+        errorMessage: 'Rate limit exceeded',
+      },
+    })
+    await (manager as any).handleRuntimeSessionEvent('manager', {
+      type: 'turn_end',
+      toolResults: [],
+    })
+
+    expect(managerRuntime?.sendCalls).toHaveLength(1)
+    const history = manager.getConversationHistory('manager')
+    expect(
+      history.some(
+        (entry) =>
+          entry.type === 'conversation_message' &&
+          entry.role === 'system' &&
+          entry.text.includes('never published a user-visible reply'),
+      ),
+    ).toBe(false)
+  })
+
   it('handles /compact as a manager slash command without forwarding it as a user prompt', async () => {
     const config = await makeTempConfig()
     const manager = new TestSwarmManager(config)

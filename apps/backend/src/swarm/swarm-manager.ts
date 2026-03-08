@@ -197,6 +197,19 @@ function areContextUsagesEqual(
   );
 }
 
+interface PendingManagerReplyExpectation {
+  sourceContext: MessageSourceContext;
+  queuedAt: string;
+  recoveryAttempt: number;
+}
+
+interface ActiveManagerTurnState extends PendingManagerReplyExpectation {
+  startedAt: string;
+  hadAssistantActivity: boolean;
+  hadToolActivity: boolean;
+  publishedToUser: boolean;
+}
+
 export class SwarmManager extends EventEmitter implements SwarmToolHost {
   private readonly config: SwarmConfig;
   private readonly now: () => string;
@@ -207,6 +220,8 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
   private readonly runtimes = new Map<string, SwarmAgentRuntime>();
   private readonly conversationEntriesByAgentId = new Map<string, ConversationEntryEvent[]>();
   private readonly crossManagerMessageLog = new Map<string, number[]>();
+  private readonly pendingManagerReplyExpectations = new Map<string, PendingManagerReplyExpectation[]>();
+  private readonly activeManagerTurns = new Map<string, ActiveManagerTurnState>();
   private readonly conversationProjector: ConversationProjector;
   private readonly persistenceService: PersistenceService;
   private readonly runtimeFactory: RuntimeFactory;
@@ -463,6 +478,10 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
       this.emitStatus(target.agentId, target.status, 0, target.contextUsage);
     }
 
+    if (target.role === "manager") {
+      this.clearManagerReplyTracking(target.agentId);
+    }
+
     await this.saveStore();
     this.emitAgentsSnapshot();
 
@@ -542,6 +561,7 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
         this.emitStatus(target.agentId, target.status, 0, target.contextUsage);
       }
 
+      this.clearManagerReplyTracking(target.agentId);
       managerStopped = true;
     }
 
@@ -716,6 +736,7 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
     await this.terminateDescriptor(target, { abort: true, emitStatus: true });
     this.descriptors.delete(targetManagerId);
     this.conversationProjector.deleteConversationHistory(targetManagerId);
+    this.clearManagerReplyTracking(targetManagerId);
     this.clearCrossManagerRateLimitForManager(targetManagerId);
 
     await this.saveStore();
@@ -1340,6 +1361,10 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
       sourceContext: resolvedTargetContext
     };
 
+    if (source === "speak_to_user") {
+      this.markManagerTurnPublishedToUser(agentId);
+    }
+
     this.emitConversationMessage(payload);
     this.logDebug("manager:publish_to_user", {
       source,
@@ -1588,6 +1613,20 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
 
     try {
       const receipt = await managerRuntime.sendMessage(runtimeMessage, requestedDelivery);
+      if (receipt.acceptedMode === "prompt" || receipt.acceptedMode === "followUp") {
+        this.enqueueManagerReplyExpectation(managerContextId, {
+          sourceContext,
+          queuedAt: receivedAt,
+          recoveryAttempt: 0
+        });
+      } else if (receipt.acceptedMode === "steer" && !this.hasManagerReplyTracking(managerContextId)) {
+        this.enqueueManagerReplyExpectation(managerContextId, {
+          sourceContext,
+          queuedAt: receivedAt,
+          recoveryAttempt: 0
+        });
+      }
+
       this.logDebug("manager:user_message_dispatch_complete", {
         managerContextId,
         targetAgentId: managerContextId,
@@ -1636,6 +1675,7 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
       this.runtimes.delete(managerId);
     }
 
+    this.clearManagerReplyTracking(managerId);
     this.conversationProjector.resetConversationHistory(managerId);
     await this.deleteManagerSessionFile(managerDescriptor.sessionFile);
 
@@ -2267,6 +2307,7 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
   }
 
   private async handleRuntimeSessionEvent(agentId: string, event: RuntimeSessionEvent): Promise<void> {
+    await this.trackManagerTurnLifecycle(agentId, event);
     this.captureConversationEventFromRuntime(agentId, event);
 
     if (!this.config.debug) return;
@@ -2332,6 +2373,10 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
       return;
     }
 
+    if (descriptor.role === "manager" && error.phase !== "compaction") {
+      this.clearManagerReplyTracking(agentId);
+    }
+
     const message = error.message.trim().length > 0 ? error.message.trim() : "Unknown runtime error";
     const attempt = readPositiveIntegerDetail(error.details, "attempt");
     const maxAttempts = readPositiveIntegerDetail(error.details, "maxAttempts");
@@ -2368,6 +2413,229 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
 
   private captureConversationEventFromRuntime(agentId: string, event: RuntimeSessionEvent): void {
     this.conversationProjector.captureConversationEventFromRuntime(agentId, event);
+  }
+
+  private enqueueManagerReplyExpectation(
+    managerId: string,
+    expectation: PendingManagerReplyExpectation,
+    options?: { prepend?: boolean }
+  ): PendingManagerReplyExpectation {
+    const queue = this.pendingManagerReplyExpectations.get(managerId) ?? [];
+    if (options?.prepend) {
+      queue.unshift(expectation);
+    } else {
+      queue.push(expectation);
+    }
+    this.pendingManagerReplyExpectations.set(managerId, queue);
+    return expectation;
+  }
+
+  private removeQueuedManagerReplyExpectation(
+    managerId: string,
+    expectation: PendingManagerReplyExpectation
+  ): void {
+    const queue = this.pendingManagerReplyExpectations.get(managerId);
+    if (!queue) {
+      return;
+    }
+
+    const index = queue.indexOf(expectation);
+    if (index >= 0) {
+      queue.splice(index, 1);
+    }
+
+    if (queue.length === 0) {
+      this.pendingManagerReplyExpectations.delete(managerId);
+      return;
+    }
+
+    this.pendingManagerReplyExpectations.set(managerId, queue);
+  }
+
+  private clearManagerReplyTracking(managerId: string): void {
+    this.pendingManagerReplyExpectations.delete(managerId);
+    this.activeManagerTurns.delete(managerId);
+  }
+
+  private hasManagerReplyTracking(managerId: string): boolean {
+    const pending = this.pendingManagerReplyExpectations.get(managerId);
+    return this.activeManagerTurns.has(managerId) || Boolean(pending && pending.length > 0);
+  }
+
+  private ensureActiveManagerTurn(managerId: string): ActiveManagerTurnState | undefined {
+    const existing = this.activeManagerTurns.get(managerId);
+    if (existing) {
+      return existing;
+    }
+
+    const queue = this.pendingManagerReplyExpectations.get(managerId);
+    const next = queue?.shift();
+    if (!next) {
+      return undefined;
+    }
+
+    if (!queue || queue.length === 0) {
+      this.pendingManagerReplyExpectations.delete(managerId);
+    } else {
+      this.pendingManagerReplyExpectations.set(managerId, queue);
+    }
+
+    const activeTurn: ActiveManagerTurnState = {
+      ...next,
+      startedAt: this.now(),
+      hadAssistantActivity: false,
+      hadToolActivity: false,
+      publishedToUser: false
+    };
+    this.activeManagerTurns.set(managerId, activeTurn);
+    return activeTurn;
+  }
+
+  private markManagerTurnPublishedToUser(managerId: string): void {
+    const activeTurn = this.ensureActiveManagerTurn(managerId);
+    if (!activeTurn) {
+      return;
+    }
+
+    activeTurn.publishedToUser = true;
+    this.activeManagerTurns.set(managerId, activeTurn);
+  }
+
+  private async trackManagerTurnLifecycle(agentId: string, event: RuntimeSessionEvent): Promise<void> {
+    const descriptor = this.descriptors.get(agentId);
+    if (!descriptor || descriptor.role !== "manager") {
+      return;
+    }
+
+    switch (event.type) {
+      case "turn_start":
+        this.ensureActiveManagerTurn(agentId);
+        return;
+
+      case "message_start":
+      case "message_update":
+      case "message_end": {
+        if (extractRole(event.message) !== "assistant") {
+          return;
+        }
+
+        if (event.type === "message_end" && extractMessageStopReason(event.message) === "error") {
+          return;
+        }
+
+        const activeTurn = this.ensureActiveManagerTurn(agentId);
+        if (!activeTurn) {
+          return;
+        }
+
+        activeTurn.hadAssistantActivity = true;
+        this.activeManagerTurns.set(agentId, activeTurn);
+        return;
+      }
+
+      case "tool_execution_start":
+      case "tool_execution_update":
+      case "tool_execution_end": {
+        const activeTurn = this.ensureActiveManagerTurn(agentId);
+        if (!activeTurn) {
+          return;
+        }
+
+        activeTurn.hadToolActivity = true;
+        this.activeManagerTurns.set(agentId, activeTurn);
+        return;
+      }
+
+      case "turn_end":
+        await this.finalizeManagerTurn(agentId);
+        return;
+
+      case "agent_end":
+      case "agent_start":
+      case "auto_compaction_start":
+      case "auto_compaction_end":
+      case "auto_retry_start":
+      case "auto_retry_end":
+        return;
+    }
+  }
+
+  private async finalizeManagerTurn(managerId: string): Promise<void> {
+    const activeTurn = this.ensureActiveManagerTurn(managerId);
+    if (!activeTurn) {
+      return;
+    }
+
+    this.activeManagerTurns.delete(managerId);
+
+    if (activeTurn.publishedToUser) {
+      return;
+    }
+
+    if (!activeTurn.hadAssistantActivity && !activeTurn.hadToolActivity) {
+      return;
+    }
+
+    if (activeTurn.recoveryAttempt < 1) {
+      const retryExpectation = this.enqueueManagerReplyExpectation(
+        managerId,
+        {
+          sourceContext: activeTurn.sourceContext,
+          queuedAt: this.now(),
+          recoveryAttempt: activeTurn.recoveryAttempt + 1
+        },
+        { prepend: true }
+      );
+
+      try {
+        await this.sendMessage(
+          managerId,
+          managerId,
+          buildSilentManagerTurnRecoveryPrompt(activeTurn.sourceContext),
+          "auto",
+          { origin: "internal" }
+        );
+
+        this.logDebug("manager:silent_turn:auto_repair", {
+          managerId,
+          sourceContext: activeTurn.sourceContext,
+          hadAssistantActivity: activeTurn.hadAssistantActivity,
+          hadToolActivity: activeTurn.hadToolActivity
+        });
+        return;
+      } catch (error) {
+        this.removeQueuedManagerReplyExpectation(managerId, retryExpectation);
+        this.emitConversationMessage({
+          type: "conversation_message",
+          agentId: managerId,
+          role: "system",
+          text: buildSilentManagerTurnFailureMessage("retry_failed"),
+          timestamp: this.now(),
+          source: "system",
+          sourceContext: activeTurn.sourceContext
+        });
+        this.logDebug("manager:silent_turn:auto_repair_error", {
+          managerId,
+          sourceContext: activeTurn.sourceContext,
+          message: error instanceof Error ? error.message : String(error)
+        });
+        return;
+      }
+    }
+
+    this.emitConversationMessage({
+      type: "conversation_message",
+      agentId: managerId,
+      role: "system",
+      text: buildSilentManagerTurnFailureMessage("silent_after_retry"),
+      timestamp: this.now(),
+      source: "system",
+      sourceContext: activeTurn.sourceContext
+    });
+    this.logDebug("manager:silent_turn:exhausted", {
+      managerId,
+      sourceContext: activeTurn.sourceContext
+    });
   }
 
   private emitStatus(
@@ -2846,6 +3114,31 @@ function formatInboundUserMessageForManager(text: string, sourceContext: Message
   }
 
   return `${sourceMetadataLine}\n\n${trimmed}`;
+}
+
+function buildSilentManagerTurnRecoveryPrompt(sourceContext: MessageSourceContext): string {
+  const replyTarget = normalizeMessageTargetContext({
+    channel: sourceContext.channel,
+    channelId: sourceContext.channelId,
+    userId: sourceContext.userId,
+    threadTs: sourceContext.threadTs,
+    integrationProfileId: sourceContext.integrationProfileId
+  });
+  const targetHint = safeJson(replyTarget);
+
+  return [
+    "You completed work for the latest user request but never called speak_to_user, so the user saw no reply.",
+    "Respond to that same request now with exactly one user-visible answer via speak_to_user.",
+    `Use speak_to_user.target ${targetHint}.`
+  ].join("\n");
+}
+
+function buildSilentManagerTurnFailureMessage(reason: "retry_failed" | "silent_after_retry"): string {
+  if (reason === "retry_failed") {
+    return "⚠️ Manager completed internal work but failed to send the final reply automatically. Please retry your last message.";
+  }
+
+  return "⚠️ Manager completed internal work but never published a user-visible reply. Please retry your last message.";
 }
 
 function parseCompactSlashCommand(text: string): { customInstructions?: string } | undefined {

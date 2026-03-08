@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { cn } from '@/lib/utils'
 
 interface ContextWindowIndicatorProps {
   usedTokens: number
@@ -35,6 +36,13 @@ export function ContextWindowIndicator({
       : fillRatio >= 0.8
         ? 'stroke-amber-500'
         : 'stroke-emerald-500'
+
+  const usageToneClass =
+    fillRatio >= 0.95
+      ? 'border-red-500/20 bg-red-500/10 text-red-700 dark:text-red-300'
+      : fillRatio >= 0.8
+        ? 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+        : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
 
   return (
     <Tooltip>
@@ -73,11 +81,43 @@ export function ContextWindowIndicator({
           </svg>
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="bottom" align="end" sideOffset={6} className="px-3 py-2 text-xs">
-        <p className="text-muted-foreground">Context window {percentFull}% full</p>
-        <p className="font-medium">
-          {formatTokens(usedTokens)} / {formatTokens(contextWindow)} tokens used
-        </p>
+      <TooltipContent
+        side="bottom"
+        align="end"
+        sideOffset={6}
+        className="w-64 rounded-lg border border-background/15 px-3 py-3 text-xs shadow-md"
+      >
+        <div className="space-y-2.5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <p className="text-[11px] font-medium uppercase tracking-[0.08em] opacity-[0.65]">
+                Context window
+              </p>
+              <p className="text-sm font-semibold leading-none tabular-nums">
+                {percentFull}% full
+              </p>
+            </div>
+            <span
+              className={cn(
+                'inline-flex shrink-0 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium tabular-nums',
+                usageToneClass,
+              )}
+            >
+              {formatTokens(usedTokens)} used
+            </span>
+          </div>
+
+          <div className="rounded-md border border-background/15 bg-background/10 px-2.5 py-2">
+            <div className="flex items-center justify-between gap-3">
+              <span className="opacity-[0.65]">Used</span>
+              <span className="whitespace-nowrap font-medium tabular-nums">{formatTokens(usedTokens)} tokens</span>
+            </div>
+            <div className="mt-1.5 flex items-center justify-between gap-3">
+              <span className="opacity-[0.65]">Capacity</span>
+              <span className="whitespace-nowrap font-medium tabular-nums">{formatTokens(contextWindow)} tokens</span>
+            </div>
+          </div>
+        </div>
       </TooltipContent>
     </Tooltip>
   )
