@@ -1686,7 +1686,7 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
     // Guard against concurrent restarts of the same manager
     if (this.restartingManagerIds.has(managerId)) {
       this.logDebug("manager:restart:already-in-progress", { managerId });
-      return cloneDescriptor(descriptor);
+      throw new Error("A restart is already in progress for this manager.");
     }
 
     this.restartingManagerIds.add(managerId);
