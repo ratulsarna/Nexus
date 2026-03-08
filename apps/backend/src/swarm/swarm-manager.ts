@@ -1736,7 +1736,8 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
       await this.saveStore();
 
       // Do NOT emit conversation_reset — history is preserved
-      this.emitStatus(managerId, descriptor.status, runtime.getPendingCount(), descriptor.contextUsage);
+      const activeRuntime = concurrentRuntime ?? runtime;
+      this.emitStatus(managerId, descriptor.status, activeRuntime.getPendingCount(), descriptor.contextUsage);
       this.emitAgentsSnapshot();
 
       this.logDebug("manager:restart:ready", {
