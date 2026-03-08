@@ -92,6 +92,12 @@ export interface ManagerUpdatedEvent {
   requestId?: string
 }
 
+export interface ManagerRestartedEvent {
+  type: 'manager_restarted'
+  manager: AgentDescriptor
+  requestId?: string
+}
+
 export interface StopAllAgentsResultEvent {
   type: 'stop_all_agents_result'
   managerId: string
@@ -212,6 +218,7 @@ export type ServerEvent =
   | ManagerCreatedEvent
   | ManagerDeletedEvent
   | ManagerUpdatedEvent
+  | ManagerRestartedEvent
   | AgentModelUpdatedEvent
   | InterruptAgentResultEvent
   | StopAllAgentsResultEvent

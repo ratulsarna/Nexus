@@ -3858,4 +3858,175 @@ describe('SwarmManager', () => {
       expect(workerEvent).toBeDefined()
     })
   })
+
+  describe('handleRuntimeStatus stale runtime cleanup', () => {
+    it('removes stale runtime from runtimes map when status transitions to terminated', async () => {
+      const config = await makeTempConfig()
+      const manager = new TestSwarmManager(config)
+      seedManagerDescriptorForRuntimeEventTests(manager, config)
+
+      const descriptor = (manager as unknown as { descriptors: Map<string, AgentDescriptor> }).descriptors.get('manager')!
+      const runtimesMap = (manager as unknown as { runtimes: Map<string, unknown> }).runtimes
+      const fakeRuntime = new FakeRuntime(descriptor)
+      runtimesMap.set('manager', fakeRuntime as unknown as import('../swarm/runtime-types.js').SwarmAgentRuntime)
+
+      await (manager as unknown as { handleRuntimeStatus: (agentId: string, status: string, pendingCount: number) => Promise<void> })
+        .handleRuntimeStatus.call(manager, 'manager', 'terminated', 0)
+
+      expect(runtimesMap.has('manager')).toBe(false)
+      expect(descriptor.status).toBe('terminated')
+    })
+
+    it('does not remove runtime when status transitions to idle', async () => {
+      const config = await makeTempConfig()
+      const manager = new TestSwarmManager(config)
+      seedManagerDescriptorForRuntimeEventTests(manager, config)
+
+      const descriptor = (manager as unknown as { descriptors: Map<string, AgentDescriptor> }).descriptors.get('manager')!
+      descriptor.status = 'streaming'
+      const runtimesMap = (manager as unknown as { runtimes: Map<string, unknown> }).runtimes
+      const fakeRuntime = new FakeRuntime(descriptor)
+      runtimesMap.set('manager', fakeRuntime as unknown as import('../swarm/runtime-types.js').SwarmAgentRuntime)
+
+      await (manager as unknown as { handleRuntimeStatus: (agentId: string, status: string, pendingCount: number) => Promise<void> })
+        .handleRuntimeStatus.call(manager, 'manager', 'idle', 0)
+
+      expect(runtimesMap.has('manager')).toBe(true)
+      expect(descriptor.status).toBe('idle')
+    })
+  })
+
+  describe('restartManager', () => {
+    it('transitions terminated manager to idle and creates new runtime', async () => {
+      const config = await makeTempConfig()
+      const manager = new TestSwarmManager(config)
+      await bootWithDefaultManager(manager, config)
+
+      const previousRuntime = manager.runtimeByAgentId.get('manager')
+      const createdBefore = manager.createdRuntimeIds.filter((id) => id === 'manager').length
+
+      // Terminate the manager descriptor manually (simulating a crash)
+      const descriptors = (manager as unknown as { descriptors: Map<string, AgentDescriptor> }).descriptors
+      const runtimes = (manager as unknown as { runtimes: Map<string, unknown> }).runtimes
+      const descriptor = descriptors.get('manager')!
+      descriptor.status = 'terminated'
+      runtimes.delete('manager')
+
+      const restarted = await manager.restartManager('manager', 'manager')
+      expect(restarted.status).toBe('idle')
+      expect(manager.runtimeByAgentId.get('manager')).toBeDefined()
+      expect(manager.runtimeByAgentId.get('manager')).not.toBe(previousRuntime)
+      expect(manager.createdRuntimeIds.filter((id) => id === 'manager').length).toBe(createdBefore + 1)
+    })
+
+    it('preserves conversation history on restart', async () => {
+      const config = await makeTempConfig()
+      const manager = new TestSwarmManager(config)
+      await bootWithDefaultManager(manager, config)
+
+      // Seed conversation history directly
+      const conversationEntries = (manager as unknown as {
+        conversationEntriesByAgentId: Map<string, unknown[]>
+      }).conversationEntriesByAgentId
+      conversationEntries.set('manager', [
+        { type: 'conversation_message', agentId: 'manager', role: 'user', text: 'hello', timestamp: '2026-01-01T00:00:00.000Z' },
+      ])
+      expect(manager.getConversationHistory('manager').length).toBe(1)
+
+      const descriptors = (manager as unknown as { descriptors: Map<string, AgentDescriptor> }).descriptors
+      const runtimes = (manager as unknown as { runtimes: Map<string, unknown> }).runtimes
+      descriptors.get('manager')!.status = 'terminated'
+      runtimes.delete('manager')
+
+      await manager.restartManager('manager', 'manager')
+
+      // restartManager should NOT reset conversation history
+      expect(manager.getConversationHistory('manager').length).toBe(1)
+    })
+
+    it('preserves session file on restart (does not delete it)', async () => {
+      const config = await makeTempConfig()
+      const manager = new TestSwarmManager(config)
+      await bootWithDefaultManager(manager, config)
+
+      const descriptor = manager.listAgents().find((a) => a.agentId === 'manager')!
+      // Seed a session file to verify restart does not delete it
+      const sentinel = '{"sentinel":true}\n'
+      await writeFile(descriptor.sessionFile, sentinel, 'utf8')
+      expect(existsSync(descriptor.sessionFile)).toBe(true)
+
+      const descriptors = (manager as unknown as { descriptors: Map<string, AgentDescriptor> }).descriptors
+      const runtimes = (manager as unknown as { runtimes: Map<string, unknown> }).runtimes
+      descriptors.get('manager')!.status = 'terminated'
+      runtimes.delete('manager')
+
+      await manager.restartManager('manager', 'manager')
+      // Session file must still exist (not deleted like resetManagerSession would)
+      expect(existsSync(descriptor.sessionFile)).toBe(true)
+    })
+
+    it('cleans up stale runtime before creating new one', async () => {
+      const config = await makeTempConfig()
+      const manager = new TestSwarmManager(config)
+      await bootWithDefaultManager(manager, config)
+
+      const staleRuntime = manager.runtimeByAgentId.get('manager')!
+      const descriptors = (manager as unknown as { descriptors: Map<string, AgentDescriptor> }).descriptors
+      descriptors.get('manager')!.status = 'terminated'
+
+      await manager.restartManager('manager', 'manager')
+
+      expect(staleRuntime.terminateCalls.length).toBeGreaterThan(0)
+      expect(manager.runtimeByAgentId.get('manager')).not.toBe(staleRuntime)
+    })
+
+    it('is a no-op for already-idle manager with live runtime', async () => {
+      const config = await makeTempConfig()
+      const manager = new TestSwarmManager(config)
+      await bootWithDefaultManager(manager, config)
+      const runtimeCountBefore = manager.createdRuntimeIds.filter((id) => id === 'manager').length
+
+      const result = await manager.restartManager('manager', 'manager')
+      expect(result.status).toBe('idle')
+      expect(manager.createdRuntimeIds.filter((id) => id === 'manager').length).toBe(runtimeCountBefore)
+    })
+
+    it('throws for unknown manager id', async () => {
+      const config = await makeTempConfig()
+      const manager = new TestSwarmManager(config)
+      await bootWithDefaultManager(manager, config)
+
+      await expect(manager.restartManager('manager', 'nonexistent')).rejects.toThrow('Unknown manager')
+    })
+
+    it('throws for worker agent id', async () => {
+      const config = await makeTempConfig()
+      const manager = new TestSwarmManager(config)
+      await bootWithDefaultManager(manager, config)
+
+      const worker = await manager.spawnAgent('manager', { agentId: 'worker-1' } as any)
+
+      await expect(manager.restartManager('manager', worker.agentId)).rejects.toThrow('Unknown manager')
+    })
+
+    it('works for stopped manager', async () => {
+      const config = await makeTempConfig()
+      const manager = new TestSwarmManager(config)
+      await bootWithDefaultManager(manager, config)
+
+      const previousRuntime = manager.runtimeByAgentId.get('manager')
+      const createdBefore = manager.createdRuntimeIds.filter((id) => id === 'manager').length
+
+      const descriptors = (manager as unknown as { descriptors: Map<string, AgentDescriptor> }).descriptors
+      const runtimes = (manager as unknown as { runtimes: Map<string, unknown> }).runtimes
+      descriptors.get('manager')!.status = 'stopped'
+      runtimes.delete('manager')
+
+      const restarted = await manager.restartManager('manager', 'manager')
+      expect(restarted.status).toBe('idle')
+      expect(manager.runtimeByAgentId.get('manager')).toBeDefined()
+      expect(manager.runtimeByAgentId.get('manager')).not.toBe(previousRuntime)
+      expect(manager.createdRuntimeIds.filter((id) => id === 'manager').length).toBe(createdBefore + 1)
+    })
+  })
 })

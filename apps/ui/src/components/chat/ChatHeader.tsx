@@ -1,4 +1,4 @@
-import { Loader2, Menu, Minimize2, MoreHorizontal, PanelRight, Square, Trash2 } from 'lucide-react'
+import { Loader2, Menu, Minimize2, MoreHorizontal, PanelRight, RotateCw, Square, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
@@ -33,6 +33,9 @@ interface ChatHeaderProps {
   onStopAll: () => void
   showNewChat: boolean
   onNewChat: () => void
+  showRestart: boolean
+  restartInProgress: boolean
+  onRestart: () => void
   isArtifactsPanelOpen: boolean
   onToggleArtifactsPanel: () => void
   onToggleMobileSidebar?: () => void
@@ -99,6 +102,9 @@ export function ChatHeader({
   onStopAll,
   showNewChat,
   onNewChat,
+  showRestart,
+  restartInProgress,
+  onRestart,
   isArtifactsPanelOpen,
   onToggleArtifactsPanel,
   onToggleMobileSidebar,
@@ -193,7 +199,7 @@ export function ChatHeader({
         </div>
 
         {/* ── Three-dots dropdown: secondary actions ── */}
-        {(showCompact || showNewChat || showStopAll) ? (
+        {(showCompact || showNewChat || showStopAll || showRestart) ? (
           <>
             <Separator orientation="vertical" className="hidden sm:block mx-0.5 h-4 bg-border/60" />
             <DropdownMenu>
@@ -230,6 +236,21 @@ export function ChatHeader({
                   >
                     <Trash2 className="size-3.5" />
                     Clear conversation
+                  </DropdownMenuItem>
+                ) : null}
+
+                {showRestart ? (
+                  <DropdownMenuItem
+                    onClick={onRestart}
+                    disabled={restartInProgress}
+                    className="gap-2 text-xs"
+                  >
+                    {restartInProgress ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <RotateCw className="size-3.5" />
+                    )}
+                    {restartInProgress ? 'Restarting…' : 'Restart Manager'}
                   </DropdownMenuItem>
                 ) : null}
 
