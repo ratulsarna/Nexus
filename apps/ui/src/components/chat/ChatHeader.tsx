@@ -1,4 +1,4 @@
-import { Loader2, Menu, Minimize2, MoreHorizontal, PanelRight, RotateCw, Square, Trash2 } from 'lucide-react'
+import { Loader2, Menu, Minimize2, MoreHorizontal, PanelLeft, PanelRight, RotateCw, Square, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
@@ -39,6 +39,8 @@ interface ChatHeaderProps {
   isArtifactsPanelOpen: boolean
   onToggleArtifactsPanel: () => void
   onToggleMobileSidebar?: () => void
+  isDesktopSidebarOpen?: boolean
+  onToggleDesktopSidebar?: () => void
 }
 
 function formatAgentStatus(status: AgentStatus | null): string {
@@ -108,6 +110,8 @@ export function ChatHeader({
   isArtifactsPanelOpen,
   onToggleArtifactsPanel,
   onToggleMobileSidebar,
+  isDesktopSidebarOpen = true,
+  onToggleDesktopSidebar,
 }: ChatHeaderProps) {
   const isStreaming = connected && activeAgentStatus === 'streaming'
   const statusLabel = connected ? formatAgentStatus(activeAgentStatus) : 'Reconnecting'
@@ -127,6 +131,26 @@ export function ChatHeader({
           >
             <Menu className="size-4" />
           </Button>
+        ) : null}
+
+        {/* Desktop sidebar toggle */}
+        {onToggleDesktopSidebar ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="hidden size-8 shrink-0 text-muted-foreground hover:bg-accent/70 hover:text-foreground md:inline-flex"
+                onClick={onToggleDesktopSidebar}
+                aria-label={isDesktopSidebarOpen ? 'Close sidebar' : 'Open sidebar'}
+              >
+                <PanelLeft className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" sideOffset={6}>
+              {isDesktopSidebarOpen ? 'Close sidebar' : 'Open sidebar'}
+            </TooltipContent>
+          </Tooltip>
         ) : null}
 
         <div

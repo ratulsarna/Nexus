@@ -78,6 +78,8 @@ export function IndexPage() {
   const [isArtifactsPanelOpen, setIsArtifactsPanelOpen] = useState(false)
   const [channelView, setChannelView] = useState<ChannelView>('web')
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
+  const [isDesktopSidebarOpen, setIsDesktopSidebarOpen] = useState(true)
+  const [sidebarWidth, setSidebarWidth] = useState(320)
   const [interruptingAgentIds, setInterruptingAgentIds] = useState<Set<string>>(() => new Set())
 
   const activeAgentId = useMemo(() => {
@@ -433,7 +435,10 @@ export function IndexPage() {
           selectedAgentId={activeAgentId}
           isSettingsActive={activeView === 'settings'}
           isMobileOpen={isMobileSidebarOpen}
+          isDesktopOpen={isDesktopSidebarOpen}
+          desktopWidth={sidebarWidth}
           onMobileClose={() => setIsMobileSidebarOpen(false)}
+          onDesktopWidthChange={setSidebarWidth}
           onAddManager={handleOpenCreateManagerDialog}
           onSelectAgent={handleSelectAgent}
           onDeleteAgent={handleDeleteAgent}
@@ -501,6 +506,10 @@ export function IndexPage() {
                   onToggleArtifactsPanel={handleToggleArtifactsPanel}
                   onToggleMobileSidebar={() =>
                     setIsMobileSidebarOpen((previous) => !previous)
+                  }
+                  isDesktopSidebarOpen={isDesktopSidebarOpen}
+                  onToggleDesktopSidebar={() =>
+                    setIsDesktopSidebarOpen((previous) => !previous)
                   }
                 />
 

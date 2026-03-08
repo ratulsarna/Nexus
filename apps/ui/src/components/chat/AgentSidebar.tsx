@@ -1,6 +1,6 @@
 import { ChevronDown, ChevronRight, CircleDashed, RotateCw, Settings, SquarePen, UserStar, X } from 'lucide-react'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { buildManagerTreeRows } from '@/lib/agent-hierarchy'
 import { inferModelPreset } from '@/lib/model-preset'
@@ -14,7 +14,10 @@ interface AgentSidebarProps {
   selectedAgentId: string | null
   isSettingsActive: boolean
   isMobileOpen?: boolean
+  isDesktopOpen?: boolean
+  desktopWidth?: number
   onMobileClose?: () => void
+  onDesktopWidthChange?: (width: number) => void
   onAddManager: () => void
   onSelectAgent: (agentId: string) => void
   onDeleteAgent: (agentId: string) => void
@@ -239,7 +242,10 @@ export function AgentSidebar({
   selectedAgentId,
   isSettingsActive,
   isMobileOpen = false,
+  isDesktopOpen = true,
+  desktopWidth = 320,
   onMobileClose,
+  onDesktopWidthChange,
   onAddManager,
   onSelectAgent,
   onDeleteAgent,
@@ -317,13 +323,37 @@ export function AgentSidebar({
     onMobileClose?.()
   }
 
+  const [isResizing, setIsResizing] = useState(false)
+
+  const handleResizeStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      setIsResizing(true)
+
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+        const newWidth = Math.min(Math.max(moveEvent.clientX, 200), 480)
+        onDesktopWidthChange?.(newWidth)
+      }
+
+      const handleMouseUp = () => {
+        setIsResizing(false)
+        document.removeEventListener('mousemove', handleMouseMove)
+        document.removeEventListener('mouseup', handleMouseUp)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+      }
+
+      document.addEventListener('mousemove', handleMouseMove)
+      document.addEventListener('mouseup', handleMouseUp)
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+    },
+    [onDesktopWidthChange],
+  )
+
   const sidebarContent = (
     <aside
-      className={cn(
-        'flex h-full flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground',
-        // Desktop: fixed width in flex layout
-        'max-md:w-full md:w-[20rem] md:min-w-[20rem] md:shrink-0',
-      )}
+      className="flex h-full w-full flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
     >
       <div className="mb-2 flex h-[62px] shrink-0 items-center gap-2 border-b border-sidebar-border px-2">
         <button
@@ -524,8 +554,23 @@ export function AgentSidebar({
   return (
     <>
       {/* Desktop: render inline */}
-      <div className="hidden md:flex md:shrink-0">
+      <div
+        className={cn(
+          'hidden md:flex md:shrink-0 relative overflow-hidden',
+          !isResizing && 'transition-[width] duration-200 ease-out',
+        )}
+        style={{ width: isDesktopOpen ? `${desktopWidth}px` : 0 }}
+      >
         {sidebarContent}
+        {/* Resize handle */}
+        {isDesktopOpen && (
+          <div
+            onMouseDown={handleResizeStart}
+            className="absolute right-0 top-0 bottom-0 z-20 w-1.5 cursor-col-resize group/resize"
+          >
+            <div className="absolute inset-y-0 right-0 w-[3px] rounded-full bg-transparent transition-colors group-hover/resize:bg-primary/50" />
+          </div>
+        )}
       </div>
 
       {/* Mobile: render as overlay */}
