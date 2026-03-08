@@ -232,6 +232,142 @@ function parseJsonRecord(input: string | undefined): Record<string, unknown> {
   }
 }
 
+const CODEX_THREAD_ITEM_TYPES = new Set([
+  'commandExecution',
+  'fileChange',
+  'mcpToolCall',
+  'collabAgentToolCall',
+  'webSearch',
+  'imageView',
+])
+
+function normalizeCodexInputPayload(payload: string | undefined): string | undefined {
+  if (!payload) return payload
+
+  let parsed: Record<string, unknown>
+  try {
+    parsed = JSON.parse(payload)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return payload
+  } catch {
+    return payload
+  }
+
+  if (typeof parsed.type !== 'string' || !CODEX_THREAD_ITEM_TYPES.has(parsed.type)) return payload
+
+  switch (parsed.type) {
+    case 'commandExecution': {
+      const args: Record<string, unknown> = {}
+      const command = parsed.command
+      if (typeof command === 'string') args.command = command
+      else if (Array.isArray(command)) args.command = command.join(' ')
+      return JSON.stringify(args)
+    }
+
+    case 'fileChange': {
+      const changes = Array.isArray(parsed.changes) ? parsed.changes : []
+      const first = changes[0] as Record<string, unknown> | undefined
+      if (!first) return JSON.stringify({})
+
+      const args: Record<string, unknown> = {}
+      if (typeof first.path === 'string') args.path = first.path
+
+      const kind = first.kind as Record<string, unknown> | undefined
+      const kindType = typeof kind?.type === 'string' ? kind.type : 'update'
+
+      if (kindType === 'create' && typeof first.content === 'string') {
+        args.content = first.content
+      } else if (typeof first.diff === 'string') {
+        const filePath = typeof first.path === 'string' ? first.path : 'file'
+        args.patch = `--- a/${filePath}\n+++ b/${filePath}\n${first.diff}`
+      }
+
+      return JSON.stringify(args)
+    }
+
+    case 'mcpToolCall': {
+      const args: Record<string, unknown> = {}
+      if (typeof parsed.server === 'string') args.server = parsed.server
+      if (typeof parsed.tool === 'string') args.toolName = parsed.tool
+      const innerArgs = parsed.arguments
+      if (innerArgs && typeof innerArgs === 'object' && !Array.isArray(innerArgs)) {
+        Object.assign(args, innerArgs as Record<string, unknown>)
+      }
+      return JSON.stringify(args)
+    }
+
+    case 'collabAgentToolCall': {
+      const args: Record<string, unknown> = {}
+      if (typeof parsed.tool === 'string') args.toolName = parsed.tool
+      const innerArgs = parsed.arguments
+      if (innerArgs && typeof innerArgs === 'object' && !Array.isArray(innerArgs)) {
+        Object.assign(args, innerArgs as Record<string, unknown>)
+      }
+      return JSON.stringify(args)
+    }
+
+    case 'webSearch': {
+      const args: Record<string, unknown> = {}
+      if (typeof parsed.query === 'string') args.query = parsed.query
+      return JSON.stringify(args)
+    }
+
+    case 'imageView': {
+      const args: Record<string, unknown> = {}
+      if (typeof parsed.url === 'string') args.url = parsed.url
+      if (typeof parsed.path === 'string') args.path = parsed.path
+      return JSON.stringify(args)
+    }
+
+    default:
+      return payload
+  }
+}
+
+function normalizeCodexOutputPayload(payload: string | undefined): string | undefined {
+  if (!payload) return payload
+
+  let parsed: Record<string, unknown>
+  try {
+    parsed = JSON.parse(payload)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return payload
+  } catch {
+    return payload
+  }
+
+  if (typeof parsed.type !== 'string' || !CODEX_THREAD_ITEM_TYPES.has(parsed.type)) return payload
+
+  switch (parsed.type) {
+    case 'commandExecution': {
+      const result: Record<string, unknown> = {}
+      if (typeof parsed.output === 'string' && parsed.output.length > 0) result.output = parsed.output
+      if (typeof parsed.exit_code === 'number') result.exit_code = parsed.exit_code
+      if (typeof parsed.exitCode === 'number') result.exitCode = parsed.exitCode
+      if (typeof parsed.status === 'string') result.status = parsed.status
+      return JSON.stringify(Object.keys(result).length > 0 ? result : { summary: 'Tool execution completed' })
+    }
+
+    case 'fileChange': {
+      const status = typeof parsed.status === 'string' ? parsed.status : 'completed'
+      if (status !== 'completed') return JSON.stringify({ status })
+      return JSON.stringify({ summary: 'Tool execution completed' })
+    }
+
+    case 'mcpToolCall':
+    case 'collabAgentToolCall': {
+      const result: Record<string, unknown> = {}
+      if (typeof parsed.output === 'string') result.output = parsed.output
+      if (typeof parsed.status === 'string') result.status = parsed.status
+      if (parsed.result !== undefined) result.result = parsed.result
+      return JSON.stringify(Object.keys(result).length > 0 ? result : { summary: 'Tool execution completed' })
+    }
+
+    default: {
+      const { type: _type, id: _id, ...rest } = parsed
+      return JSON.stringify(Object.keys(rest).length > 0 ? rest : { summary: 'Tool execution completed' })
+    }
+  }
+}
+
 function isBoilerplateResult(payload: string): boolean {
   try {
     const parsed = JSON.parse(payload)
@@ -367,7 +503,23 @@ function ToolExecutionLogRow({ entry }: { entry: ToolExecutionDisplayEntry }) {
   const displayStatus = mapToolStatus(entry)
   const categoryConfig =
     CATEGORY_MESSAGE_CONFIG[entry.classification.category] ?? CATEGORY_MESSAGE_CONFIG.unknown
-  const inputRecord = parseJsonRecord(entry.inputPayload ?? entry.latestPayload)
+
+  // Normalize Codex thread item envelopes so rendering matches Claude's clean format
+  const inputPayload = useMemo(
+    () => normalizeCodexInputPayload(entry.inputPayload) ?? entry.inputPayload,
+    [entry.inputPayload],
+  )
+  const rawOutputPayload =
+    entry.outputPayload ??
+    (entry.latestPayload && entry.latestPayload !== entry.inputPayload
+      ? entry.latestPayload
+      : undefined)
+  const outputPayload = useMemo(
+    () => normalizeCodexOutputPayload(rawOutputPayload) ?? rawOutputPayload,
+    [rawOutputPayload],
+  )
+
+  const inputRecord = parseJsonRecord(inputPayload ?? entry.latestPayload)
   const friendlyMessage = getFriendlyToolMessage(
     entry.classification.category,
     entry.toolName,
@@ -377,12 +529,6 @@ function ToolExecutionLogRow({ entry }: { entry: ToolExecutionDisplayEntry }) {
   const actorLabel = entry.actorAgentId?.trim()
 
   const ToolIcon = categoryConfig.icon
-
-  const outputPayload =
-    entry.outputPayload ??
-    (entry.latestPayload && entry.latestPayload !== entry.inputPayload
-      ? entry.latestPayload
-      : undefined)
 
   const outputLabel =
     displayStatus === 'pending'
@@ -394,9 +540,9 @@ function ToolExecutionLogRow({ entry }: { entry: ToolExecutionDisplayEntry }) {
           : 'Result'
 
   const diffData = useMemo(() => {
-    if (entry.classification.category !== 'file' || !entry.inputPayload) return null
-    return extractFileDiffData(entry.toolName, entry.inputPayload)
-  }, [entry.classification.category, entry.toolName, entry.inputPayload])
+    if (entry.classification.category !== 'file' || !inputPayload) return null
+    return extractFileDiffData(entry.toolName, inputPayload)
+  }, [entry.classification.category, entry.toolName, inputPayload])
 
   const normalizedToolName = (entry.toolName ?? '').trim().toLowerCase()
   const toolConfig = normalizedToolName ? TOOL_DETAIL_CONFIG[normalizedToolName] : undefined
@@ -467,8 +613,8 @@ function ToolExecutionLogRow({ entry }: { entry: ToolExecutionDisplayEntry }) {
           <div className="ml-6 mt-1 space-y-2 pb-1">
             {diffData ? (
               <FileDiffView data={diffData} />
-            ) : entry.inputPayload && !toolConfig?.hideInput ? (
-              <ToolPayloadBlock label="Input" value={entry.inputPayload} tone="neutral" />
+            ) : inputPayload && !toolConfig?.hideInput ? (
+              <ToolPayloadBlock label="Input" value={inputPayload} tone="neutral" />
             ) : null}
 
             {outputPayload && !(isFileCategory && displayStatus === 'completed' && isBoilerplateResult(outputPayload)) ? (
