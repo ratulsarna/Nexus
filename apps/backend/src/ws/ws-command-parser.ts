@@ -58,6 +58,27 @@ export function parseClientCommand(raw: RawData): ParsedClientCommand {
     };
   }
 
+  if (maybe.type === "interrupt_agent") {
+    const agentId = (maybe as { agentId?: unknown }).agentId;
+    const requestId = (maybe as { requestId?: unknown }).requestId;
+
+    if (typeof agentId !== "string" || agentId.trim().length === 0) {
+      return { ok: false, error: "interrupt_agent.agentId must be a non-empty string" };
+    }
+    if (requestId !== undefined && typeof requestId !== "string") {
+      return { ok: false, error: "interrupt_agent.requestId must be a string when provided" };
+    }
+
+    return {
+      ok: true,
+      command: {
+        type: "interrupt_agent",
+        agentId: agentId.trim(),
+        requestId
+      }
+    };
+  }
+
   if (maybe.type === "stop_all_agents") {
     const managerId = (maybe as { managerId?: unknown }).managerId;
     const requestId = (maybe as { requestId?: unknown }).requestId;
@@ -472,6 +493,7 @@ export function extractRequestId(command: ClientCommand): string | undefined {
     case "restart_manager":
     case "update_manager":
     case "update_agent_model":
+    case "interrupt_agent":
     case "stop_all_agents":
     case "list_directories":
     case "validate_directory":

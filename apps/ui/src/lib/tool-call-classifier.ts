@@ -88,6 +88,7 @@ const CALLABLE_EXACT_CATEGORY = new Map<string, ToolCallCategory>([
   ['report_agent_job_result', 'agent'],
   ['send_message_to_agent', 'agent'],
   ['list_agents', 'agent'],
+  ['interrupt_agent', 'agent'],
   ['kill_agent', 'agent'],
 
   ['list_mcp_resources', 'mcp'],

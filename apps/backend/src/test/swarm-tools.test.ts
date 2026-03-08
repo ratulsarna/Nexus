@@ -47,6 +47,13 @@ function makeHost(spawnImpl: (callerAgentId: string, input: SpawnAgentInput) => 
       return [makeManagerDescriptor()]
     },
     spawnAgent: spawnImpl,
+    async interruptAgent(_callerAgentId, targetAgentId) {
+      return {
+        agentId: targetAgentId,
+        managerId: 'manager',
+        interrupted: true,
+      }
+    },
     async killAgent(): Promise<void> {},
     async sendMessage(): Promise<SendMessageReceipt> {
       return {
@@ -180,12 +187,64 @@ describe('buildSwarmTools', () => {
     expect(receivedInput?.model).toBeUndefined()
   })
 
+  it('propagates interrupt_agent target id to host.interruptAgent', async () => {
+    let interruptedTargetAgentId: string | undefined
+
+    const host: SwarmToolHost = {
+      listAgents: () => [makeManagerDescriptor(), makeWorkerDescriptor('worker-a')],
+      spawnAgent: async () => makeWorkerDescriptor('worker'),
+      interruptAgent: async (_callerAgentId, targetAgentId) => {
+        interruptedTargetAgentId = targetAgentId
+        return {
+          agentId: targetAgentId,
+          managerId: 'manager',
+          interrupted: true,
+        }
+      },
+      killAgent: async () => {},
+      sendMessage: async () => ({
+        targetAgentId: 'worker',
+        deliveryId: 'delivery-1',
+        acceptedMode: 'prompt',
+      }),
+      publishToUser: async () => ({
+        targetContext: { channel: 'web' as const },
+      }),
+    }
+
+    const tools = buildSwarmTools(host, makeManagerDescriptor())
+    const interruptTool = tools.find((tool) => tool.name === 'interrupt_agent')
+    expect(interruptTool).toBeDefined()
+
+    const result = await interruptTool!.execute(
+      'tool-call',
+      {
+        targetAgentId: 'worker-a',
+      },
+      undefined,
+      undefined,
+      undefined as any,
+    )
+
+    expect(interruptedTargetAgentId).toBe('worker-a')
+    expect(result.details).toMatchObject({
+      agentId: 'worker-a',
+      managerId: 'manager',
+      interrupted: true,
+    })
+  })
+
   it('forwards speak_to_user target metadata and returns resolved target context', async () => {
     let receivedTarget: { channel: 'web' | 'slack' | 'telegram'; channelId?: string; userId?: string; threadTs?: string } | undefined
 
     const host: SwarmToolHost = {
       listAgents: () => [makeManagerDescriptor()],
       spawnAgent: async () => makeWorkerDescriptor('worker'),
+      interruptAgent: async (_callerAgentId, targetAgentId) => ({
+        agentId: targetAgentId,
+        managerId: 'manager',
+        interrupted: true,
+      }),
       killAgent: async () => {},
       sendMessage: async () => ({
         targetAgentId: 'worker',

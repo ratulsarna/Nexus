@@ -650,6 +650,47 @@ describe('ManagerWsClient', () => {
     client.destroy()
   })
 
+  it('sends interrupt_agent and resolves from interrupt_agent_result event', async () => {
+    const client = new ManagerWsClient('ws://127.0.0.1:8787', 'manager')
+
+    client.start()
+    vi.advanceTimersByTime(60)
+
+    const socket = FakeWebSocket.instances[0]
+    socket.emit('open')
+
+    emitServerEvent(socket, {
+      type: 'ready',
+      serverTime: new Date().toISOString(),
+      subscribedAgentId: 'manager',
+    })
+
+    const interruptPromise = client.interruptAgent('worker-1')
+    const interruptPayload = JSON.parse(socket.sentPayloads.at(-1) ?? '{}')
+
+    expect(interruptPayload).toMatchObject({
+      type: 'interrupt_agent',
+      agentId: 'worker-1',
+    })
+    expect(typeof interruptPayload.requestId).toBe('string')
+
+    emitServerEvent(socket, {
+      type: 'interrupt_agent_result',
+      requestId: interruptPayload.requestId,
+      agentId: 'worker-1',
+      managerId: 'manager',
+      interrupted: true,
+    })
+
+    await expect(interruptPromise).resolves.toEqual({
+      agentId: 'worker-1',
+      managerId: 'manager',
+      interrupted: true,
+    })
+
+    client.destroy()
+  })
+
   it('clears only the current thread messages on conversation_reset', () => {
     const client = new ManagerWsClient('ws://127.0.0.1:47187', 'manager')
     const snapshots: ReturnType<typeof client.getState>[] = []
@@ -747,6 +788,79 @@ describe('ManagerWsClient', () => {
     expect(afterReset?.agents).toHaveLength(1)
     expect(Object.keys(afterReset?.statuses ?? {})).toContain('manager')
     expect(afterReset?.lastError).toBeNull()
+
+    client.destroy()
+  })
+
+  it('resets stale idle pending counts when an agents_snapshot arrives', () => {
+    const client = new ManagerWsClient('ws://127.0.0.1:8787', 'manager')
+
+    client.start()
+    vi.advanceTimersByTime(60)
+
+    const socket = FakeWebSocket.instances[0]
+    socket.emit('open')
+
+    emitServerEvent(socket, {
+      type: 'ready',
+      serverTime: new Date().toISOString(),
+      subscribedAgentId: 'manager',
+    })
+
+    emitServerEvent(socket, {
+      type: 'agents_snapshot',
+      agents: [
+        {
+          agentId: 'manager',
+          managerId: 'manager',
+          displayName: 'Manager',
+          role: 'manager',
+          status: 'idle',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          cwd: '/tmp',
+          model: {
+            provider: 'openai-codex',
+            modelId: 'gpt-5.3-codex',
+            thinkingLevel: 'xhigh',
+          },
+          sessionFile: '/tmp/manager.jsonl',
+        },
+      ],
+    })
+
+    emitServerEvent(socket, {
+      type: 'agent_status',
+      agentId: 'manager',
+      status: 'idle',
+      pendingCount: 2,
+    })
+
+    expect(client.getState().statuses.manager?.pendingCount).toBe(2)
+
+    emitServerEvent(socket, {
+      type: 'agents_snapshot',
+      agents: [
+        {
+          agentId: 'manager',
+          managerId: 'manager',
+          displayName: 'Manager',
+          role: 'manager',
+          status: 'idle',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          cwd: '/tmp',
+          model: {
+            provider: 'openai-codex',
+            modelId: 'gpt-5.3-codex',
+            thinkingLevel: 'xhigh',
+          },
+          sessionFile: '/tmp/manager.jsonl',
+        },
+      ],
+    })
+
+    expect(client.getState().statuses.manager?.pendingCount).toBe(0)
 
     client.destroy()
   })

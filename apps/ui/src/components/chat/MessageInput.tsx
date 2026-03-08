@@ -32,10 +32,13 @@ const OPENAI_KEY_REQUIRED_MESSAGE = 'OpenAI API key required \u2014 add it in Se
 
 interface MessageInputProps {
   onSend: (message: string, attachments?: ConversationAttachment[]) => void
+  onStop?: () => void
   isLoading: boolean
   disabled?: boolean
   agentLabel?: string
   allowWhileLoading?: boolean
+  showStop?: boolean
+  stopDisabled?: boolean
   wsUrl?: string
   activeAgent?: AgentDescriptor | null
   catalog?: CreateManagerCatalog | null
@@ -109,10 +112,13 @@ async function hasConfiguredOpenAiKey(endpoint: string): Promise<boolean> {
 export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(function MessageInput(
   {
     onSend,
+    onStop,
     isLoading,
     disabled = false,
     agentLabel = 'agent',
     allowWhileLoading = false,
+    showStop = false,
+    stopDisabled = false,
     wsUrl,
     activeAgent,
     catalog,
@@ -492,18 +498,25 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             </div>
 
             <Button
-              type="submit"
-              disabled={!canSubmit}
+              type={showStop ? 'button' : 'submit'}
+              disabled={showStop ? stopDisabled : !canSubmit}
+              onClick={showStop ? onStop : undefined}
               size="icon"
               className={cn(
                 'size-7 rounded-full transition-all',
-                canSubmit
-                  ? 'bg-primary text-primary-foreground hover:bg-primary/90 active:scale-95'
-                  : 'cursor-default bg-muted text-muted-foreground/40',
+                showStop
+                  ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90 active:scale-95'
+                  : canSubmit
+                    ? 'bg-primary text-primary-foreground hover:bg-primary/90 active:scale-95'
+                    : 'cursor-default bg-muted text-muted-foreground/40',
               )}
-              aria-label="Send message"
+              aria-label={showStop ? 'Stop agent' : 'Send message'}
             >
-              <ArrowUp className="size-3.5" strokeWidth={2.5} />
+              {showStop ? (
+                <Square className="size-3 fill-current" />
+              ) : (
+                <ArrowUp className="size-3.5" strokeWidth={2.5} />
+              )}
             </Button>
           </div>
 

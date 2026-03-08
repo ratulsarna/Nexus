@@ -432,6 +432,56 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
     this.emitAgentsSnapshot();
   }
 
+  async interruptAgent(
+    callerAgentId: string,
+    targetAgentId: string
+  ): Promise<{ agentId: string; managerId: string; interrupted: boolean }> {
+    const manager = this.assertManager(callerAgentId, "interrupt agents");
+
+    const target = this.descriptors.get(targetAgentId);
+    if (!target) {
+      throw new Error(`Unknown agent: ${targetAgentId}`);
+    }
+    if (isNonRunningAgentStatus(target.status)) {
+      throw new Error(`Agent is not running: ${targetAgentId}`);
+    }
+
+    if (target.role === "manager") {
+      if (target.agentId !== manager.agentId) {
+        throw new Error(`Only selected manager can interrupt manager ${targetAgentId}`);
+      }
+    } else if (target.managerId !== manager.agentId) {
+      throw new Error(`Only owning manager can interrupt agent ${targetAgentId}`);
+    }
+
+    const runtime = this.runtimes.get(target.agentId);
+    if (runtime) {
+      await runtime.stopInFlight({ abort: true });
+    } else {
+      target.status = transitionAgentStatus(target.status, "idle");
+      target.updatedAt = this.now();
+      this.descriptors.set(target.agentId, target);
+      this.emitStatus(target.agentId, target.status, 0, target.contextUsage);
+    }
+
+    await this.saveStore();
+    this.emitAgentsSnapshot();
+
+    const managerId = target.role === "manager" ? target.agentId : target.managerId;
+
+    this.logDebug("agent:interrupt", {
+      callerAgentId,
+      targetAgentId,
+      managerId
+    });
+
+    return {
+      agentId: target.agentId,
+      managerId,
+      interrupted: true
+    };
+  }
+
   async stopAllAgents(
     callerAgentId: string,
     targetManagerId: string

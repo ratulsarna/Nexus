@@ -16,6 +16,10 @@ export interface SwarmToolHost {
   listAgents(): AgentDescriptor[];
   spawnAgent(callerAgentId: string, input: SpawnAgentInput): Promise<AgentDescriptor>;
   killAgent(callerAgentId: string, targetAgentId: string): Promise<void>;
+  interruptAgent(
+    callerAgentId: string,
+    targetAgentId: string
+  ): Promise<{ agentId: string; managerId: string; interrupted: boolean }>;
   sendMessage(
     fromAgentId: string,
     targetAgentId: string,
@@ -188,6 +192,39 @@ export function buildSwarmTools(host: SwarmToolHost, descriptor: AgentDescriptor
             }
           ],
           details: spawned
+        };
+      }
+    },
+    {
+      name: "interrupt_agent",
+      label: "Interrupt Agent",
+      description:
+        "Interrupt an owned worker's current in-flight or queued work without killing it. The worker remains available for future messages.",
+      parameters: Type.Object({
+        targetAgentId: Type.String({ description: "Owned worker agent id to interrupt." })
+      }),
+      async execute(_toolCallId, params) {
+        const parsed = params as { targetAgentId: string };
+        const target = host.listAgents().find((agent) => agent.agentId === parsed.targetAgentId);
+        if (!target) {
+          throw new Error(`Unknown agent: ${parsed.targetAgentId}`);
+        }
+        if (target.role !== "worker") {
+          throw new Error("interrupt_agent only supports worker agents");
+        }
+        if (target.managerId !== descriptor.agentId) {
+          throw new Error(`Manager ${descriptor.agentId} does not own worker ${parsed.targetAgentId}`);
+        }
+
+        const interrupted = await host.interruptAgent(descriptor.agentId, parsed.targetAgentId);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Interrupted agent ${interrupted.agentId}; runtime remains available for future messages.`
+            }
+          ],
+          details: interrupted
         };
       }
     },
