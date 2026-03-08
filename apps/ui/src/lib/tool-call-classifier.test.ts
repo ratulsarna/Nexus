@@ -116,6 +116,16 @@ describe('classifyToolCall', () => {
     })
 
     expect(
+      classifyToolCall('interrupt_agent', {
+        entryType: 'agent_tool_call',
+        eventKind: 'tool_execution_start',
+      }),
+    ).toMatchObject({
+      callable: true,
+      category: 'agent',
+    })
+
+    expect(
       classifyToolCall('artifacts', {
         entryType: 'agent_tool_call',
         eventKind: 'tool_execution_start',

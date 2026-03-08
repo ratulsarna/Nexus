@@ -78,6 +78,7 @@ export function IndexPage() {
   const [isArtifactsPanelOpen, setIsArtifactsPanelOpen] = useState(false)
   const [channelView, setChannelView] = useState<ChannelView>('web')
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
+  const [isInterruptingActiveAgent, setIsInterruptingActiveAgent] = useState(false)
 
   const activeAgentId = useMemo(() => {
     return state.targetAgentId ?? state.subscribedAgentId ?? chooseFallbackAgentId(state.agents)
@@ -140,6 +141,10 @@ export function IndexPage() {
   })
 
   const isLoading = activeAgentStatus === 'streaming' || isAwaitingResponseStart
+  const activeAgentPendingCount = activeAgentId ? (state.statuses[activeAgentId]?.pendingCount ?? 0) : 0
+  const showInterruptActiveAgent =
+    Boolean(activeAgentId) &&
+    (activeAgentStatus === 'streaming' || isAwaitingResponseStart || activeAgentPendingCount > 0)
   const canStopAllAgents =
     isActiveManager &&
     (activeAgentStatus === 'idle' || activeAgentStatus === 'streaming')
@@ -235,6 +240,12 @@ export function IndexPage() {
   }, [activeAgentId])
 
   useEffect(() => {
+    if (!showInterruptActiveAgent) {
+      setIsInterruptingActiveAgent(false)
+    }
+  }, [showInterruptActiveAgent])
+
+  useEffect(() => {
     if (routeState.view !== 'chat') {
       return
     }
@@ -303,6 +314,32 @@ export function IndexPage() {
       delivery: 'steer',
     })
   }
+
+  const handleInterruptActiveAgent = useCallback(async () => {
+    const client = clientRef.current
+    if (!client || !activeAgentId || isInterruptingActiveAgent) {
+      return
+    }
+
+    setIsInterruptingActiveAgent(true)
+
+    try {
+      await client.interruptAgent(activeAgentId)
+      clearPendingResponseForAgent(activeAgentId)
+      setState((previous) => ({
+        ...previous,
+        lastError: null,
+      }))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to stop agent.'
+      setState((previous) => ({
+        ...previous,
+        lastError: `Failed to stop agent: ${message}`,
+      }))
+    } finally {
+      setIsInterruptingActiveAgent(false)
+    }
+  }, [activeAgentId, clearPendingResponseForAgent, clientRef, isInterruptingActiveAgent, setState])
 
   const handleSelectAgent = (agentId: string) => {
     navigateToRoute({ view: 'chat', agentId })
@@ -447,9 +484,12 @@ export function IndexPage() {
                 <MessageInput
                   ref={messageInputRef}
                   onSend={handleSend}
+                  onStop={() => void handleInterruptActiveAgent()}
                   isLoading={isLoading}
                   disabled={!state.connected || !activeAgentId}
                   allowWhileLoading
+                  showStop={showInterruptActiveAgent}
+                  stopDisabled={isInterruptingActiveAgent || !state.connected || !activeAgentId}
                   agentLabel={activeAgentLabel}
                   wsUrl={wsUrl}
                   activeAgent={activeAgent}

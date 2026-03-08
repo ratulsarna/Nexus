@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { fireEvent, getAllByRole, getByLabelText, getByRole, queryByText } from '@testing-library/dom'
+import { fireEvent, getAllByRole, getByLabelText, getByRole, queryByRole, queryByText } from '@testing-library/dom'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
@@ -529,6 +529,124 @@ describe('IndexPage create manager model selection', () => {
       text: 'ship it',
       agentId: 'release-worker',
       delivery: 'auto',
+    })
+  })
+
+  it('swaps send for stop and interrupts the active manager', async () => {
+    const socket = await renderPage()
+
+    emitServerEvent(socket, {
+      type: 'agents_snapshot',
+      agents: [
+        buildManager('manager', '/tmp/manager'),
+      ],
+    })
+
+    emitServerEvent(socket, {
+      type: 'agent_status',
+      agentId: 'manager',
+      status: 'streaming',
+      pendingCount: 1,
+    })
+
+    await vi.advanceTimersByTimeAsync(0)
+
+    click(getByRole(container, 'button', { name: 'Stop agent' }))
+
+    const interruptPayload = JSON.parse(socket.sentPayloads.at(-1) ?? '{}')
+    expect(interruptPayload).toMatchObject({
+      type: 'interrupt_agent',
+      agentId: 'manager',
+    })
+
+    emitServerEvent(socket, {
+      type: 'interrupt_agent_result',
+      requestId: interruptPayload.requestId,
+      agentId: 'manager',
+      managerId: 'manager',
+      interrupted: true,
+    })
+    emitServerEvent(socket, {
+      type: 'agent_status',
+      agentId: 'manager',
+      status: 'idle',
+      pendingCount: 0,
+    })
+
+    await vi.advanceTimersByTimeAsync(0)
+    expect(queryByRole(container, 'button', { name: 'Stop agent' })).toBeNull()
+    expect(getByRole(container, 'button', { name: 'Send message' })).not.toBeNull()
+  })
+
+  it('still allows follow-up sends via keyboard while the stop button is shown', async () => {
+    const socket = await renderPage()
+
+    emitServerEvent(socket, {
+      type: 'agents_snapshot',
+      agents: [
+        buildManager('manager', '/tmp/manager'),
+      ],
+    })
+
+    emitServerEvent(socket, {
+      type: 'agent_status',
+      agentId: 'manager',
+      status: 'streaming',
+      pendingCount: 1,
+    })
+
+    await vi.advanceTimersByTimeAsync(0)
+
+    const input = getByRole(container, 'textbox') as HTMLTextAreaElement
+    changeValue(input, 'follow up while streaming')
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(JSON.parse(socket.sentPayloads.at(-1) ?? '{}')).toEqual({
+      type: 'user_message',
+      text: 'follow up while streaming',
+      agentId: 'manager',
+      delivery: 'steer',
+    })
+    expect(getByRole(container, 'button', { name: 'Stop agent' })).not.toBeNull()
+  })
+
+  it('swaps send for stop and interrupts the selected worker', async () => {
+    const socket = await renderPage()
+
+    emitServerEvent(socket, {
+      type: 'agents_snapshot',
+      agents: [
+        buildManager('manager', '/tmp/manager'),
+        buildWorker('release-worker', 'manager', '/tmp/manager'),
+      ],
+    })
+
+    await vi.advanceTimersByTimeAsync(0)
+
+    const workerRow = queryByText(sidebar(), 'release-worker')
+    expect(workerRow).not.toBeNull()
+    click(workerRow!.closest('button') as HTMLButtonElement)
+
+    emitServerEvent(socket, {
+      type: 'ready',
+      serverTime: new Date().toISOString(),
+      subscribedAgentId: 'release-worker',
+    })
+    emitServerEvent(socket, {
+      type: 'agent_status',
+      agentId: 'release-worker',
+      status: 'streaming',
+      pendingCount: 1,
+    })
+
+    await vi.advanceTimersByTimeAsync(0)
+
+    click(getByRole(container, 'button', { name: 'Stop agent' }))
+
+    const interruptPayload = JSON.parse(socket.sentPayloads.at(-1) ?? '{}')
+    expect(interruptPayload).toMatchObject({
+      type: 'interrupt_agent',
+      agentId: 'release-worker',
     })
   })
 })
