@@ -1,6 +1,7 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { normalizeManagerId } from "../utils/normalize.js";
+import { writeFileAtomic } from "../utils/write-file-atomic.js";
 
 const INTEGRATIONS_DIR_NAME = "integrations";
 const INTEGRATIONS_MANAGERS_DIR_NAME = "managers";
@@ -61,11 +62,7 @@ export class BaseConfigPersistence<TConfig> {
 
   async save(options: { dataDir: string; managerId: string; config: TConfig }): Promise<void> {
     const configPath = this.getPath(options.dataDir, options.managerId);
-    const tmpPath = `${configPath}.tmp`;
-
-    await mkdir(dirname(configPath), { recursive: true });
-    await writeFile(tmpPath, `${JSON.stringify(options.config, null, 2)}\n`, "utf8");
-    await rename(tmpPath, configPath);
+    await writeFileAtomic(configPath, `${JSON.stringify(options.config, null, 2)}\n`);
   }
 }
 

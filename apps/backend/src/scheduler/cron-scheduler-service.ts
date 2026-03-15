@@ -1,8 +1,9 @@
 import { watch, type FSWatcher } from "node:fs";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 import { CronExpressionParser } from "cron-parser";
 import type { SwarmManager } from "../swarm/swarm-manager.js";
+import { writeFileAtomic } from "../utils/write-file-atomic.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const MIN_POLL_INTERVAL_MS = 5_000;
@@ -369,11 +370,7 @@ export class CronSchedulerService {
 
   private async writeSchedulesFile(payload: SchedulesFile): Promise<void> {
     const target = this.schedulesFile;
-    const temp = `${target}.tmp`;
-
-    await mkdir(dirname(target), { recursive: true });
-    await writeFile(temp, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-    await rename(temp, target);
+    await writeFileAtomic(target, `${JSON.stringify(payload, null, 2)}\n`);
   }
 }
 
