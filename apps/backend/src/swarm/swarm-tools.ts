@@ -77,7 +77,8 @@ export function buildSwarmTools(host: SwarmToolHost, descriptor: AgentDescriptor
     {
       name: "list_agents",
       label: "List Agents",
-      description: "List swarm agents with ids, roles, status, model, and workspace.",
+      description:
+        "List swarm agents with ids, roles, status, model, and workspace. Manager entries are included so cross-manager discovery works from the tool surface.",
       parameters: Type.Object({}),
       async execute() {
         const agents = host.listAgents();

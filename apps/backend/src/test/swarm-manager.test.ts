@@ -401,6 +401,12 @@ describe('SwarmManager', () => {
     expect(managerPrompt).toContain(
       'All delegation/subagent work must stay inside the Nexus swarm. Use only `spawn_agent` to create workers and `send_message_to_agent` to route or coordinate with existing Nexus agents.',
     )
+    expect(managerPrompt).toContain(
+      'Never use `sleep`, `wait`, or artificial delays to "check back later" on worker progress.',
+    )
+    expect(managerPrompt).toContain(
+      'When the swarm contains multiple managers, you can see all managers via list_agents.',
+    )
 
     const worker = await manager.spawnAgent('manager', { agentId: 'Prompt Worker' })
     const workerPrompt = manager.systemPromptByAgentId.get(worker.agentId)
