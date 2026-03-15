@@ -1160,6 +1160,92 @@ describe('SwarmWebSocketServer', () => {
     await server.stop()
   })
 
+  it('uses transcript-focused bootstrap history on reconnect', async () => {
+    const port = await getAvailablePort()
+    const config = await makeTempConfig(port)
+
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const server = new SwarmWebSocketServer({
+      swarmManager: manager,
+      host: config.host,
+      port: config.port,
+      allowNonManagerSubscriptions: config.allowNonManagerSubscriptions,
+    })
+
+    await server.start()
+
+    const clientA = new WebSocket(`ws://${config.host}:${config.port}`)
+    const eventsA: ServerEvent[] = []
+    clientA.on('message', (raw) => {
+      eventsA.push(JSON.parse(raw.toString()) as ServerEvent)
+    })
+
+    await once(clientA, 'open')
+    clientA.send(JSON.stringify({ type: 'subscribe' }))
+    await waitForEvent(eventsA, (event) => event.type === 'conversation_history')
+
+    clientA.send(JSON.stringify({ type: 'user_message', text: 'remember this' }))
+    await waitForEvent(
+      eventsA,
+      (event) =>
+        event.type === 'conversation_message' &&
+        event.agentId === 'manager' &&
+        event.source === 'user_input' &&
+        event.text === 'remember this',
+    )
+
+    ;(manager as any).conversationProjector.emitConversationLog({
+      type: 'conversation_log',
+      agentId: 'manager',
+      timestamp: new Date().toISOString(),
+      source: 'runtime_log',
+      kind: 'tool_execution_start',
+      toolName: 'shell',
+      toolCallId: 'history-noise',
+      text: '{"command":"pwd"}',
+    })
+
+    await waitForEvent(
+      eventsA,
+      (event) =>
+        event.type === 'conversation_log' &&
+        event.agentId === 'manager' &&
+        event.toolCallId === 'history-noise',
+    )
+
+    clientA.close()
+    await once(clientA, 'close')
+
+    const clientB = new WebSocket(`ws://${config.host}:${config.port}`)
+    const eventsB: ServerEvent[] = []
+    clientB.on('message', (raw) => {
+      eventsB.push(JSON.parse(raw.toString()) as ServerEvent)
+    })
+
+    await once(clientB, 'open')
+    clientB.send(JSON.stringify({ type: 'subscribe' }))
+
+    const historyEvent = await waitForEvent(eventsB, (event) => event.type === 'conversation_history')
+    expect(historyEvent.type).toBe('conversation_history')
+    if (historyEvent.type === 'conversation_history') {
+      expect(historyEvent.messages.some((message) => message.type === 'conversation_log')).toBe(false)
+      expect(
+        historyEvent.messages.some(
+          (message) =>
+            message.type === 'conversation_message' &&
+            message.source === 'user_input' &&
+            message.text === 'remember this',
+        ),
+      ).toBe(true)
+    }
+
+    clientB.close()
+    await once(clientB, 'close')
+    await server.stop()
+  })
+
   it('handles /new via websocket by resetting manager session and clearing history', async () => {
     const port = await getAvailablePort()
     const config = await makeTempConfig(port)
@@ -1373,6 +1459,90 @@ describe('SwarmWebSocketServer', () => {
       expect(logEvent.toolName).toBe(rawToolName)
       expect(logEvent.toolCallId).toBe(rawToolCallId)
     }
+
+    client.close()
+    await once(client, 'close')
+    await server.stop()
+  })
+
+  it('streams worker detail history and live events without replacing the primary manager subscription', async () => {
+    const port = await getAvailablePort()
+    const config = await makeTempConfig(port)
+
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const worker = await manager.spawnAgent('manager', { agentId: 'Worker Detail' })
+    const server = new SwarmWebSocketServer({
+      swarmManager: manager,
+      host: config.host,
+      port: config.port,
+      allowNonManagerSubscriptions: config.allowNonManagerSubscriptions,
+    })
+
+    await server.start()
+
+    const client = new WebSocket(`ws://${config.host}:${config.port}`)
+    const events: ServerEvent[] = []
+    client.on('message', (raw) => {
+      events.push(JSON.parse(raw.toString()) as ServerEvent)
+    })
+
+    await once(client, 'open')
+    client.send(JSON.stringify({ type: 'subscribe' }))
+    await waitForEvent(events, (event) => event.type === 'ready' && event.subscribedAgentId === 'manager')
+
+    client.send(JSON.stringify({ type: 'subscribe_agent_detail', agentId: worker.agentId }))
+
+    const detailHistory = await waitForEvent(
+      events,
+      (event) => event.type === 'conversation_history' && event.agentId === worker.agentId,
+    )
+    expect(detailHistory.type).toBe('conversation_history')
+
+    ;(manager as any).conversationProjector.emitConversationLog({
+      type: 'conversation_log',
+      agentId: worker.agentId,
+      timestamp: new Date().toISOString(),
+      source: 'runtime_log',
+      kind: 'tool_execution_start',
+      toolName: 'shell',
+      toolCallId: 'detail-call',
+      text: '{"command":"ls"}',
+    })
+
+    const detailEvent = await waitForEvent(
+      events,
+      (event) =>
+        event.type === 'conversation_log' &&
+        event.agentId === worker.agentId &&
+        event.toolCallId === 'detail-call',
+    )
+    expect(detailEvent.type).toBe('conversation_log')
+
+    client.send(JSON.stringify({ type: 'unsubscribe_agent_detail', agentId: worker.agentId }))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    ;(manager as any).conversationProjector.emitConversationLog({
+      type: 'conversation_log',
+      agentId: worker.agentId,
+      timestamp: new Date().toISOString(),
+      source: 'runtime_log',
+      kind: 'tool_execution_start',
+      toolName: 'shell',
+      toolCallId: 'detail-after-unsubscribe',
+      text: '{"command":"pwd"}',
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'conversation_log' &&
+          event.agentId === worker.agentId &&
+          event.toolCallId === 'detail-after-unsubscribe',
+      ),
+    ).toBe(false)
 
     client.close()
     await once(client, 'close')

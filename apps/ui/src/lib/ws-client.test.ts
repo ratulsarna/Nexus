@@ -45,6 +45,44 @@ function emitServerEvent(socket: FakeWebSocket, event: unknown): void {
   })
 }
 
+function buildManager() {
+  return {
+    agentId: 'manager',
+    managerId: 'manager',
+    displayName: 'Manager',
+    role: 'manager' as const,
+    status: 'idle' as const,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    cwd: '/tmp',
+    model: {
+      provider: 'claude-agent-sdk',
+      modelId: 'claude-opus-4-6',
+      thinkingLevel: 'xhigh' as const,
+    },
+    sessionFile: '/tmp/manager.jsonl',
+  }
+}
+
+function buildWorker() {
+  return {
+    agentId: 'worker-1',
+    managerId: 'manager',
+    displayName: 'Worker 1',
+    role: 'worker' as const,
+    status: 'idle' as const,
+    createdAt: '2026-01-01T00:01:00.000Z',
+    updatedAt: '2026-01-01T00:01:00.000Z',
+    cwd: '/tmp',
+    model: {
+      provider: 'claude-agent-sdk',
+      modelId: 'claude-opus-4-6',
+      thinkingLevel: 'high' as const,
+    },
+    sessionFile: '/tmp/worker-1.jsonl',
+  }
+}
+
 describe('ManagerWsClient', () => {
   const originalWebSocket = globalThis.WebSocket
   const originalWindow = (globalThis as any).window
@@ -129,6 +167,132 @@ describe('ManagerWsClient', () => {
 
     expect(client.getState().targetAgentId).toBe('release-manager')
     expect(client.getState().subscribedAgentId).toBe('release-manager')
+
+    client.destroy()
+  })
+
+  it('keeps the manager subscription while selecting worker detail', () => {
+    const client = new ManagerWsClient('ws://127.0.0.1:8787')
+
+    client.start()
+    vi.advanceTimersByTime(60)
+
+    const socket = FakeWebSocket.instances[0]
+    socket.emit('open')
+
+    emitServerEvent(socket, {
+      type: 'ready',
+      serverTime: new Date().toISOString(),
+      subscribedAgentId: 'manager',
+    })
+    emitServerEvent(socket, {
+      type: 'agents_snapshot',
+      agents: [buildManager(), buildWorker()],
+    })
+
+    const selectionStart = socket.sentPayloads.length
+    client.subscribeToAgent('worker-1')
+
+    const selectionPayloads = socket.sentPayloads
+      .slice(selectionStart)
+      .map((payload) => JSON.parse(payload))
+
+    expect(selectionPayloads).toContainEqual({
+      type: 'subscribe',
+      agentId: 'manager',
+    })
+    expect(selectionPayloads.at(-1)).toEqual({
+      type: 'subscribe_agent_detail',
+      agentId: 'worker-1',
+    })
+    expect(client.getState().targetAgentId).toBe('worker-1')
+
+    emitServerEvent(socket, {
+      type: 'ready',
+      serverTime: new Date().toISOString(),
+      subscribedAgentId: 'manager',
+    })
+
+    expect(client.getState().subscribedAgentId).toBe('manager')
+    expect(client.getState().targetAgentId).toBe('worker-1')
+
+    client.destroy()
+  })
+
+  it('unsubscribes worker detail when switching back to the manager', () => {
+    const client = new ManagerWsClient('ws://127.0.0.1:8787')
+
+    client.start()
+    vi.advanceTimersByTime(60)
+
+    const socket = FakeWebSocket.instances[0]
+    socket.emit('open')
+
+    emitServerEvent(socket, {
+      type: 'ready',
+      serverTime: new Date().toISOString(),
+      subscribedAgentId: 'manager',
+    })
+    emitServerEvent(socket, {
+      type: 'agents_snapshot',
+      agents: [buildManager(), buildWorker()],
+    })
+
+    client.subscribeToAgent('worker-1')
+    const switchBackStart = socket.sentPayloads.length
+    client.subscribeToAgent('manager')
+
+    const switchBackPayloads = socket.sentPayloads
+      .slice(switchBackStart)
+      .map((payload) => JSON.parse(payload))
+
+    expect(switchBackPayloads).toContainEqual({
+      type: 'unsubscribe_agent_detail',
+      agentId: 'worker-1',
+    })
+    expect(switchBackPayloads.at(-1)).toEqual({
+      type: 'subscribe',
+      agentId: 'manager',
+    })
+
+    client.destroy()
+  })
+
+  it('re-subscribes worker detail after reconnect', () => {
+    const client = new ManagerWsClient('ws://127.0.0.1:8787')
+
+    client.start()
+    vi.advanceTimersByTime(60)
+
+    const socket = FakeWebSocket.instances[0]
+    socket.emit('open')
+
+    emitServerEvent(socket, {
+      type: 'ready',
+      serverTime: new Date().toISOString(),
+      subscribedAgentId: 'manager',
+    })
+    emitServerEvent(socket, {
+      type: 'agents_snapshot',
+      agents: [buildManager(), buildWorker()],
+    })
+
+    client.subscribeToAgent('worker-1')
+
+    socket.close()
+    vi.advanceTimersByTime(1200)
+
+    const reconnectedSocket = FakeWebSocket.instances[1]
+    reconnectedSocket.emit('open')
+
+    expect(JSON.parse(reconnectedSocket.sentPayloads[0] ?? '')).toEqual({
+      type: 'subscribe',
+      agentId: 'manager',
+    })
+    expect(JSON.parse(reconnectedSocket.sentPayloads[1] ?? '')).toEqual({
+      type: 'subscribe_agent_detail',
+      agentId: 'worker-1',
+    })
 
     client.destroy()
   })

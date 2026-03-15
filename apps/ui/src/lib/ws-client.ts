@@ -108,6 +108,7 @@ const WS_REQUEST_ERROR_HINTS: Array<{ requestType: WsRequestType; codeFragment: 
 export class ManagerWsClient {
   private readonly url: string
   private desiredAgentId: string | null
+  private desiredDetailAgentId: string | null = null
 
   private socket: WebSocket | null = null
   private connectTimer: ReturnType<typeof setTimeout> | undefined
@@ -175,22 +176,48 @@ export class ManagerWsClient {
     const trimmed = agentId.trim()
     if (!trimmed) return
 
-    this.desiredAgentId = trimmed
-    this.updateState({
-      targetAgentId: trimmed,
-      messages: [],
-      activityMessages: [],
-      lastError: null,
-    })
+    const { primaryAgentId, detailAgentId } = this.resolveSubscriptionSelection(trimmed)
+
+    this.desiredAgentId = primaryAgentId
+    this.setFocusedAgent(trimmed)
 
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      this.desiredDetailAgentId = detailAgentId
       return
     }
 
+    if (detailAgentId) {
+      this.send({
+        type: 'subscribe',
+        agentId: primaryAgentId,
+      })
+      this.syncDetailSubscription(detailAgentId)
+      return
+    }
+
+    this.syncDetailSubscription(null)
     this.send({
       type: 'subscribe',
-      agentId: trimmed,
+      agentId: primaryAgentId,
     })
+  }
+
+  subscribeToAgentDetail(agentId: string): void {
+    const trimmed = normalizeAgentId(agentId)
+    if (!trimmed) {
+      return
+    }
+
+    this.syncDetailSubscription(trimmed)
+  }
+
+  unsubscribeFromAgentDetail(agentId?: string): void {
+    const normalizedAgentId = normalizeAgentId(agentId) ?? this.desiredDetailAgentId
+    if (!normalizedAgentId || this.desiredDetailAgentId !== normalizedAgentId) {
+      return
+    }
+
+    this.syncDetailSubscription(null)
   }
 
   sendUserMessage(
@@ -526,6 +553,13 @@ export class ManagerWsClient {
         agentId: this.desiredAgentId ?? undefined,
       })
 
+      if (this.desiredDetailAgentId) {
+        this.send({
+          type: 'subscribe_agent_detail',
+          agentId: this.desiredDetailAgentId,
+        })
+      }
+
       if (shouldReload && typeof window !== 'undefined' && typeof window.location?.reload === 'function') {
         window.location.reload()
       }
@@ -583,7 +617,7 @@ export class ManagerWsClient {
       case 'ready':
         this.updateState({
           connected: true,
-          targetAgentId: event.subscribedAgentId,
+          targetAgentId: this.desiredDetailAgentId ?? event.subscribedAgentId,
           subscribedAgentId: event.subscribedAgentId,
           lastError: null,
         })
@@ -752,6 +786,9 @@ export class ManagerWsClient {
 
   private applyAgentsSnapshot(agents: AgentDescriptor[]): void {
     const liveAgentIds = new Set(agents.map((agent) => agent.agentId))
+    if (this.desiredDetailAgentId && !liveAgentIds.has(this.desiredDetailAgentId)) {
+      this.desiredDetailAgentId = null
+    }
     const statuses = Object.fromEntries(
       agents.map((agent) => {
         const previous = this.state.statuses[agent.agentId]
@@ -772,13 +809,18 @@ export class ManagerWsClient {
 
     const fallbackTarget = chooseFallbackAgentId(
       agents,
-      this.state.targetAgentId ?? this.state.subscribedAgentId ?? this.desiredAgentId ?? undefined,
+      this.desiredDetailAgentId ??
+        this.state.targetAgentId ??
+        this.state.subscribedAgentId ??
+        this.desiredAgentId ??
+        undefined,
     )
     const targetChanged = fallbackTarget !== this.state.targetAgentId
+    const nextPrimarySubscriptionAgentId = this.resolvePrimarySubscriptionAgentId(fallbackTarget, agents)
     const nextSubscribedAgentId =
       this.state.subscribedAgentId && liveAgentIds.has(this.state.subscribedAgentId)
         ? this.state.subscribedAgentId
-        : fallbackTarget ?? null
+        : nextPrimarySubscriptionAgentId
 
     const patch: Partial<ManagerWsState> = {
       agents,
@@ -795,14 +837,18 @@ export class ManagerWsClient {
       patch.subscribedAgentId = nextSubscribedAgentId
     }
 
-    this.desiredAgentId = fallbackTarget ?? null
+    this.desiredAgentId = nextPrimarySubscriptionAgentId
 
     this.updateState(patch)
 
-    if (targetChanged && fallbackTarget && this.socket?.readyState === WebSocket.OPEN) {
+    if (
+      nextSubscribedAgentId &&
+      nextSubscribedAgentId !== this.state.subscribedAgentId &&
+      this.socket?.readyState === WebSocket.OPEN
+    ) {
       this.send({
         type: 'subscribe',
-        agentId: fallbackTarget,
+        agentId: nextSubscribedAgentId,
       })
     }
   }
@@ -845,7 +891,12 @@ export class ManagerWsClient {
   private pushSystemMessage(text: string): void {
     const message: ConversationMessageEvent = {
       type: 'conversation_message',
-      agentId: (this.state.targetAgentId ?? this.state.subscribedAgentId ?? this.desiredAgentId) || 'system',
+      agentId:
+        (this.state.targetAgentId ??
+          this.desiredDetailAgentId ??
+          this.state.subscribedAgentId ??
+          this.desiredAgentId) ||
+        'system',
       role: 'system',
       text,
       timestamp: new Date().toISOString(),
@@ -860,6 +911,76 @@ export class ManagerWsClient {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return false
     this.socket.send(JSON.stringify(command))
     return true
+  }
+
+  private setFocusedAgent(agentId: string): void {
+    this.updateState({
+      targetAgentId: agentId,
+      messages: [],
+      activityMessages: [],
+      lastError: null,
+    })
+  }
+
+  private resolveSubscriptionSelection(agentId: string): {
+    primaryAgentId: string
+    detailAgentId: string | null
+  } {
+    const descriptor = this.state.agents.find((agent) => agent.agentId === agentId)
+    if (descriptor?.role === 'worker' && descriptor.managerId) {
+      return {
+        primaryAgentId: descriptor.managerId,
+        detailAgentId: descriptor.agentId,
+      }
+    }
+
+    return {
+      primaryAgentId: agentId,
+      detailAgentId: null,
+    }
+  }
+
+  private resolvePrimarySubscriptionAgentId(
+    targetAgentId: string | null,
+    agents: AgentDescriptor[],
+  ): string | null {
+    if (!targetAgentId) {
+      return null
+    }
+
+    const descriptor = agents.find((agent) => agent.agentId === targetAgentId)
+    if (descriptor?.role === 'worker' && descriptor.managerId) {
+      return descriptor.managerId
+    }
+
+    return targetAgentId
+  }
+
+  private syncDetailSubscription(nextDetailAgentId: string | null): void {
+    const previousDetailAgentId = this.desiredDetailAgentId
+    if (previousDetailAgentId === nextDetailAgentId) {
+      return
+    }
+
+    this.desiredDetailAgentId = nextDetailAgentId
+
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      return
+    }
+
+    if (previousDetailAgentId) {
+      this.send({
+        type: 'unsubscribe_agent_detail',
+        agentId: previousDetailAgentId,
+      })
+    }
+
+    if (nextDetailAgentId) {
+      this.send({
+        type: 'subscribe_agent_detail',
+        agentId: nextDetailAgentId,
+      })
+    }
   }
 
   private updateState(patch: Partial<ManagerWsState>): void {

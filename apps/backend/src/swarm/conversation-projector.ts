@@ -58,6 +58,14 @@ export class ConversationProjector {
     return (history ?? []).map((entry) => ({ ...entry }));
   }
 
+  getVisibleTranscript(agentId: string, limit?: number): ConversationMessageEvent[] {
+    const history = this.getConversationHistory(agentId).filter(isVisibleTranscriptEntry);
+    const normalizedLimit =
+      typeof limit === "number" && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : undefined;
+    const startIndex = normalizedLimit ? Math.max(0, history.length - normalizedLimit) : 0;
+    return history.slice(startIndex);
+  }
+
   resetConversationHistory(agentId: string): void {
     this.deps.conversationEntriesByAgentId.set(agentId, []);
   }
@@ -440,6 +448,13 @@ export class ConversationProjector {
         return;
     }
   }
+}
+
+function isVisibleTranscriptEntry(entry: ConversationEntryEvent): entry is ConversationMessageEvent {
+  return (
+    entry.type === "conversation_message" &&
+    (entry.source === "user_input" || entry.source === "speak_to_user")
+  );
 }
 
 function safeJson(value: unknown): string {
