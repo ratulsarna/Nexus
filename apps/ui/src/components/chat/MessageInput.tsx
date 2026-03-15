@@ -20,6 +20,7 @@ import {
   type PendingAttachment,
 } from '@/lib/file-attachments'
 import { resolveApiEndpoint } from '@/lib/api-endpoint'
+import { readMessageDraft, writeMessageDraft } from '@/lib/message-drafts'
 import { transcribeVoice } from '@/lib/voice-transcription-client'
 import { cn } from '@/lib/utils'
 import type { AgentDescriptor, ConversationAttachment, ThinkingLevel } from '@nexus/protocol'
@@ -44,6 +45,7 @@ interface MessageInputProps {
   catalog?: CreateManagerCatalog | null
   onModelChange?: (modelId: string) => void
   onThinkingLevelChange?: (thinkingLevel: ThinkingLevel) => void
+  draftKey?: string | null
 }
 
 export interface MessageInputHandle {
@@ -124,10 +126,12 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     catalog,
     onModelChange,
     onThinkingLevelChange,
+    draftKey,
   },
   ref,
 ) {
   const [input, setInput] = useState('')
+  const [hydratedDraftKey, setHydratedDraftKey] = useState<string | null>(null)
   const [attachedFiles, setAttachedFiles] = useState<PendingAttachment[]>([])
   const [isTranscribingVoice, setIsTranscribingVoice] = useState(false)
   const [voiceError, setVoiceError] = useState<string | null>(null)
@@ -163,6 +167,19 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   useEffect(() => {
     resizeTextarea()
   }, [input, resizeTextarea])
+
+  useEffect(() => {
+    setInput(readMessageDraft(draftKey))
+    setHydratedDraftKey(draftKey ?? null)
+  }, [draftKey])
+
+  useEffect(() => {
+    if (draftKey !== hydratedDraftKey) {
+      return
+    }
+
+    writeMessageDraft(draftKey, input)
+  }, [draftKey, hydratedDraftKey, input])
 
   useEffect(() => {
     if (!disabled && !blockedByLoading && !isRecording) {
@@ -350,7 +367,8 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
 
     setInput('')
     setAttachedFiles([])
-  }, [attachedFiles, blockedByLoading, disabled, input, isRecording, isTranscribingVoice, onSend])
+    writeMessageDraft(draftKey, '')
+  }, [attachedFiles, blockedByLoading, disabled, draftKey, input, isRecording, isTranscribingVoice, onSend])
 
   const handleSubmit = useCallback(
     (event: FormEvent<HTMLFormElement>) => {

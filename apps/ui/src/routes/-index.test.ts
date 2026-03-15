@@ -7,6 +7,8 @@ import { flushSync } from 'react-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ManagerModelCatalogResponse } from '@nexus/protocol'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { MESSAGE_DRAFTS_STORAGE_KEY } from '@/lib/message-drafts'
+import { SIDEBAR_WIDTH_STORAGE_KEY } from '@/lib/sidebar-width-storage'
 import { IndexPage } from './index'
 
 let mockSearch: Record<string, string> = {}
@@ -86,6 +88,11 @@ function changeValue(element: HTMLInputElement | HTMLTextAreaElement, value: str
   })
 }
 
+function readDraftStorage(): Record<string, string> {
+  const stored = window.localStorage.getItem(MESSAGE_DRAFTS_STORAGE_KEY)
+  return stored ? JSON.parse(stored) : {}
+}
+
 function buildManager(agentId: string, cwd: string) {
   return {
     agentId,
@@ -130,10 +137,28 @@ let root: Root | null = null
 const originalWebSocket = globalThis.WebSocket
 const originalFetch = globalThis.fetch
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(window, 'localStorage')
 let fetchMock: ReturnType<typeof vi.fn>
 let mockCatalogStatus = 200
 let mockCatalogError = 'Catalog unavailable.'
 let mockCatalogResponse: ManagerModelCatalogResponse = createDefaultCatalogResponse()
+
+function createLocalStorageMock() {
+  const storage = new Map<string, string>()
+
+  return {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      storage.set(key, String(value))
+    },
+    removeItem: (key: string) => {
+      storage.delete(key)
+    },
+    clear: () => {
+      storage.clear()
+    },
+  }
+}
 
 beforeEach(() => {
   FakeWebSocket.instances = []
@@ -178,6 +203,15 @@ beforeEach(() => {
   vi.useFakeTimers()
   ;(globalThis as any).WebSocket = FakeWebSocket
   ;(globalThis as any).fetch = fetchMock
+  const localStorageMock = createLocalStorageMock()
+  Object.defineProperty(window, 'localStorage', {
+    configurable: true,
+    value: localStorageMock,
+  })
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: localStorageMock,
+  })
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
     configurable: true,
     writable: true,
@@ -186,6 +220,7 @@ beforeEach(() => {
 
   container = document.createElement('div')
   document.body.appendChild(container)
+  window.localStorage.clear()
 })
 
 afterEach(() => {
@@ -206,6 +241,10 @@ afterEach(() => {
     writable: true,
     value: originalScrollIntoView,
   })
+  if (originalLocalStorageDescriptor) {
+    Object.defineProperty(window, 'localStorage', originalLocalStorageDescriptor)
+    Object.defineProperty(globalThis, 'localStorage', originalLocalStorageDescriptor)
+  }
 })
 
 async function renderPage(): Promise<FakeWebSocket> {
@@ -218,18 +257,18 @@ async function renderPage(): Promise<FakeWebSocket> {
   await Promise.resolve()
   vi.advanceTimersByTime(60)
 
-  const socket = FakeWebSocket.instances[0]
+  const socket = FakeWebSocket.instances.at(-1)
   expect(socket).toBeDefined()
 
-  socket.emit('open')
-  expect(JSON.parse(socket.sentPayloads.at(0) ?? '{}')).toEqual({ type: 'subscribe' })
-  emitServerEvent(socket, {
+  socket!.emit('open')
+  expect(JSON.parse(socket!.sentPayloads.at(0) ?? '{}')).toEqual({ type: 'subscribe' })
+  emitServerEvent(socket!, {
     type: 'ready',
     serverTime: new Date().toISOString(),
     subscribedAgentId: 'manager',
   })
 
-  return socket
+  return socket!
 }
 
 describe('IndexPage create manager model selection', () => {
@@ -491,15 +530,19 @@ describe('IndexPage create manager model selection', () => {
     expect(workerRow).not.toBeNull()
     click(workerRow!.closest('button') as HTMLButtonElement)
 
-    expect(JSON.parse(socket.sentPayloads.at(-1) ?? '{}')).toEqual({
+    expect(JSON.parse(socket.sentPayloads.at(-2) ?? '{}')).toEqual({
       type: 'subscribe',
+      agentId: 'manager',
+    })
+    expect(JSON.parse(socket.sentPayloads.at(-1) ?? '{}')).toEqual({
+      type: 'subscribe_agent_detail',
       agentId: 'release-worker',
     })
 
     emitServerEvent(socket, {
       type: 'ready',
       serverTime: new Date().toISOString(),
-      subscribedAgentId: 'release-worker',
+      subscribedAgentId: 'manager',
     })
 
     emitServerEvent(socket, {
@@ -630,7 +673,7 @@ describe('IndexPage create manager model selection', () => {
     emitServerEvent(socket, {
       type: 'ready',
       serverTime: new Date().toISOString(),
-      subscribedAgentId: 'release-worker',
+      subscribedAgentId: 'manager',
     })
     emitServerEvent(socket, {
       type: 'agent_status',
@@ -683,7 +726,7 @@ describe('IndexPage create manager model selection', () => {
     emitServerEvent(socket, {
       type: 'ready',
       serverTime: new Date().toISOString(),
-      subscribedAgentId: 'release-worker',
+      subscribedAgentId: 'manager',
     })
     emitServerEvent(socket, {
       type: 'agent_status',
@@ -702,6 +745,94 @@ describe('IndexPage create manager model selection', () => {
       type: 'interrupt_agent',
       agentId: 'release-worker',
     })
+  })
+
+  it('persists drafts per agent across selection changes and refresh, and prunes deleted agents', async () => {
+    const socket = await renderPage()
+
+    emitServerEvent(socket, {
+      type: 'agents_snapshot',
+      agents: [
+        buildManager('manager', '/tmp/manager'),
+        buildWorker('release-worker', 'manager', '/tmp/manager'),
+      ],
+    })
+
+    await vi.advanceTimersByTimeAsync(0)
+
+    const input = getByRole(container, 'textbox') as HTMLTextAreaElement
+    changeValue(input, 'draft for manager')
+    expect(readDraftStorage()).toEqual({ manager: 'draft for manager' })
+
+    const workerRow = queryByText(sidebar(), 'release-worker')
+    expect(workerRow).not.toBeNull()
+    click(workerRow!.closest('button') as HTMLButtonElement)
+
+    await vi.advanceTimersByTimeAsync(0)
+    expect((getByRole(container, 'textbox') as HTMLTextAreaElement).value).toBe('')
+
+    changeValue(getByRole(container, 'textbox') as HTMLTextAreaElement, 'draft for worker')
+    expect(readDraftStorage()).toEqual({
+      manager: 'draft for manager',
+      'release-worker': 'draft for worker',
+    })
+
+    click(queryByText(sidebar(), 'manager')!.closest('button') as HTMLButtonElement)
+    await vi.advanceTimersByTimeAsync(0)
+    expect((getByRole(container, 'textbox') as HTMLTextAreaElement).value).toBe('draft for manager')
+
+    flushSync(() => {
+      root?.unmount()
+    })
+    root = null
+
+    const refreshedSocket = await renderPage()
+    emitServerEvent(refreshedSocket, {
+      type: 'agents_snapshot',
+      agents: [
+        buildManager('manager', '/tmp/manager'),
+        buildWorker('release-worker', 'manager', '/tmp/manager'),
+      ],
+    })
+
+    await vi.waitFor(() => {
+      expect((getByRole(container, 'textbox') as HTMLTextAreaElement).value).toBe('draft for manager')
+    })
+
+    emitServerEvent(refreshedSocket, {
+      type: 'agents_snapshot',
+      agents: [buildManager('manager', '/tmp/manager')],
+    })
+
+    await vi.waitFor(() => {
+      expect(readDraftStorage()).toEqual({ manager: 'draft for manager' })
+    })
+  })
+
+  it('restores and persists desktop sidebar width', async () => {
+    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, '410')
+
+    await renderPage()
+    await vi.advanceTimersByTimeAsync(0)
+
+    const desktopSidebar = container.querySelector('.hidden.md\\:flex')
+    expect(desktopSidebar).not.toBeNull()
+    expect((desktopSidebar as HTMLElement).style.width).toBe('410px')
+
+    const resizeHandle = container.querySelector('.cursor-col-resize')
+    expect(resizeHandle).not.toBeNull()
+
+    flushSync(() => {
+      fireEvent.mouseDown(resizeHandle as HTMLElement, { clientX: 410 })
+    })
+    flushSync(() => {
+      fireEvent.mouseMove(document, { clientX: 360 })
+    })
+    flushSync(() => {
+      fireEvent.mouseUp(document)
+    })
+
+    expect(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)).toBe('360')
   })
 })
 

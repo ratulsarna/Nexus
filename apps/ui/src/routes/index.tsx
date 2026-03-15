@@ -32,6 +32,8 @@ import { useVisibleMessages } from '@/hooks/index-page/use-visible-messages'
 import { useContextWindow } from '@/hooks/index-page/use-context-window'
 import { usePendingResponse } from '@/hooks/index-page/use-pending-response'
 import { useFileDrop } from '@/hooks/index-page/use-file-drop'
+import { pruneMessageDrafts } from '@/lib/message-drafts'
+import { readSidebarWidth, writeSidebarWidth } from '@/lib/sidebar-width-storage'
 import type {
   ConversationAttachment,
 } from '@nexus/protocol'
@@ -79,7 +81,7 @@ export function IndexPage() {
   const [channelView, setChannelView] = useState<ChannelView>('web')
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
   const [isDesktopSidebarOpen, setIsDesktopSidebarOpen] = useState(true)
-  const [sidebarWidth, setSidebarWidth] = useState(320)
+  const [sidebarWidth, setSidebarWidth] = useState(() => readSidebarWidth())
   const [interruptingAgentIds, setInterruptingAgentIds] = useState<Set<string>>(() => new Set())
 
   const activeAgentId = useMemo(() => {
@@ -243,6 +245,18 @@ export function IndexPage() {
     setIsArtifactsPanelOpen(false)
     setIsMobileSidebarOpen(false)
   }, [activeAgentId])
+
+  useEffect(() => {
+    writeSidebarWidth(sidebarWidth)
+  }, [sidebarWidth])
+
+  useEffect(() => {
+    if (state.agents.length === 0) {
+      return
+    }
+
+    pruneMessageDrafts(state.agents.map((agent) => agent.agentId))
+  }, [state.agents])
 
   useEffect(() => {
     if (!activeAgentId || showInterruptActiveAgent) {
@@ -542,6 +556,7 @@ export function IndexPage() {
                   catalog={composerCatalog}
                   onModelChange={handleComposerModelChange}
                   onThinkingLevelChange={handleComposerThinkingLevelChange}
+                  draftKey={activeAgentId}
                 />
               </>
             )}
