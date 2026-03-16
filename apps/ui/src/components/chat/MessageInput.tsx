@@ -170,6 +170,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
 
   useEffect(() => {
     setInput(readMessageDraft(draftKey))
+    setAttachedFiles([])
     setHydratedDraftKey(draftKey ?? null)
   }, [draftKey])
 
