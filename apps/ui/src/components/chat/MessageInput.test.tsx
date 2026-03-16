@@ -4,7 +4,19 @@ import { createRef } from 'react'
 import { render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fileToPendingAttachment } from '@/lib/file-attachments'
+import { transcribeVoice } from '@/lib/voice-transcription-client'
 import { MessageInput, type MessageInputHandle } from './MessageInput'
+
+const mockVoiceRecorderState = {
+  isRecording: false,
+  isRequestingPermission: false,
+  durationMs: 0,
+  waveformBars: [] as number[],
+}
+const mockStartRecording = vi.fn()
+const mockStopRecording = vi.fn<() => Promise<{ blob: Blob; mimeType: string; durationMs: number } | null>>(
+  async () => null,
+)
 
 vi.mock('@/lib/file-attachments', async () => {
   const actual = await vi.importActual<typeof import('@/lib/file-attachments')>('@/lib/file-attachments')
@@ -24,12 +36,9 @@ vi.mock('@/lib/file-attachments', async () => {
 vi.mock('@/hooks/use-voice-recorder', () => ({
   MAX_VOICE_RECORDING_DURATION_MS: 60_000,
   useVoiceRecorder: () => ({
-    isRecording: false,
-    isRequestingPermission: false,
-    durationMs: 0,
-    waveformBars: [],
-    startRecording: vi.fn(),
-    stopRecording: vi.fn(async () => null),
+    ...mockVoiceRecorderState,
+    startRecording: mockStartRecording,
+    stopRecording: mockStopRecording,
   }),
 }))
 
@@ -55,6 +64,13 @@ describe('MessageInput', () => {
       callback(0)
       return 0
     })
+    mockVoiceRecorderState.isRecording = false
+    mockVoiceRecorderState.isRequestingPermission = false
+    mockVoiceRecorderState.durationMs = 0
+    mockVoiceRecorderState.waveformBars = []
+    mockStartRecording.mockReset()
+    mockStopRecording.mockReset()
+    mockStopRecording.mockResolvedValue(null)
     vi.mocked(fileToPendingAttachment).mockResolvedValue({
       id: 'attachment-1',
       type: 'text',
@@ -63,6 +79,7 @@ describe('MessageInput', () => {
       text: 'draft attachment',
       sizeBytes: 16,
     })
+    vi.mocked(transcribeVoice).mockReset()
   })
 
   afterEach(() => {
@@ -152,6 +169,53 @@ describe('MessageInput', () => {
 
     await waitFor(() => {
       expect(screen.queryByText('late-note.txt')).toBeNull()
+    })
+  })
+
+  it('ignores in-flight voice transcription after the draft key changes', async () => {
+    const pendingTranscription = deferred<{ text: string }>()
+    mockVoiceRecorderState.isRecording = true
+    mockStopRecording.mockResolvedValue({
+      blob: new Blob(['voice'], { type: 'audio/webm' }),
+      mimeType: 'audio/webm',
+      durationMs: 1000,
+    })
+    vi.mocked(transcribeVoice).mockReturnValueOnce(pendingTranscription.promise)
+
+    const ref = createRef<MessageInputHandle>()
+    const onSend = vi.fn()
+    const { rerender } = render(
+      <MessageInput
+        ref={ref}
+        onSend={onSend}
+        isLoading={false}
+        agentLabel="manager"
+        draftKey="manager"
+        wsUrl="ws://127.0.0.1:47187"
+      />,
+    )
+
+    const stopRecordingButton = await screen.findByRole('button', {
+      name: 'Stop recording and transcribe',
+    })
+    stopRecordingButton.click()
+
+    rerender(
+      <MessageInput
+        ref={ref}
+        onSend={onSend}
+        isLoading={false}
+        agentLabel="worker"
+        draftKey="worker"
+        wsUrl="ws://127.0.0.1:47187"
+      />,
+    )
+
+    pendingTranscription.resolve({ text: 'late transcript' })
+    await pendingTranscription.promise
+
+    await waitFor(() => {
+      expect(screen.queryByDisplayValue('late transcript')).toBeNull()
     })
   })
 })

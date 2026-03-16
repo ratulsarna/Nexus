@@ -818,6 +818,31 @@ describe('IndexPage create manager model selection', () => {
     })
   })
 
+  it('does not prune stored drafts from incremental manager events before the first full snapshot', async () => {
+    window.localStorage.setItem(
+      MESSAGE_DRAFTS_STORAGE_KEY,
+      JSON.stringify({
+        manager: 'draft for manager',
+        'existing-worker': 'draft for worker',
+      }),
+    )
+
+    const socket = await renderPage()
+
+    emitServerEvent(socket, {
+      type: 'manager_created',
+      requestId: 'req-1',
+      manager: buildManager('release-manager', '/tmp/release'),
+    })
+
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(readDraftStorage()).toEqual({
+      manager: 'draft for manager',
+      'existing-worker': 'draft for worker',
+    })
+  })
+
   it('restores and persists desktop sidebar width', async () => {
     window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, '410')
 

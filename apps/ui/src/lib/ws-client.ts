@@ -685,7 +685,7 @@ export class ManagerWsClient {
       }
 
       case 'agents_snapshot':
-        this.applyAgentsSnapshot(event.agents)
+        this.applyAgentsSnapshot(event.agents, { authoritative: true })
         break
 
       case 'manager_created': {
@@ -784,7 +784,10 @@ export class ManagerWsClient {
     }
   }
 
-  private applyAgentsSnapshot(agents: AgentDescriptor[]): void {
+  private applyAgentsSnapshot(
+    agents: AgentDescriptor[],
+    options?: { authoritative?: boolean },
+  ): void {
     const liveAgentIds = new Set(agents.map((agent) => agent.agentId))
     const previousSubscribedAgentId = this.state.subscribedAgentId
     const previousDetailAgentId = this.desiredDetailAgentId
@@ -848,7 +851,10 @@ export class ManagerWsClient {
     const patch: Partial<ManagerWsState> = {
       agents,
       statuses,
-      hasReceivedAgentsSnapshot: true,
+    }
+
+    if (options?.authoritative) {
+      patch.hasReceivedAgentsSnapshot = true
     }
 
     if (targetChanged) {

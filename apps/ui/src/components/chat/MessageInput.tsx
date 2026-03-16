@@ -138,7 +138,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const attachmentUploadGenerationRef = useRef(0)
+  const draftGenerationRef = useRef(0)
 
   const {
     isRecording,
@@ -170,9 +170,11 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   }, [input, resizeTextarea])
 
   useEffect(() => {
-    attachmentUploadGenerationRef.current += 1
+    draftGenerationRef.current += 1
     setInput(readMessageDraft(draftKey))
     setAttachedFiles([])
+    setIsTranscribingVoice(false)
+    setVoiceError(null)
     setHydratedDraftKey(draftKey ?? null)
   }, [draftKey])
 
@@ -194,9 +196,9 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     async (files: File[]) => {
       if (disabled || isRecording || files.length === 0) return
 
-      const uploadGeneration = attachmentUploadGenerationRef.current
+      const uploadGeneration = draftGenerationRef.current
       const uploaded = await Promise.all(files.map(fileToPendingAttachment))
-      if (uploadGeneration !== attachmentUploadGenerationRef.current) {
+      if (uploadGeneration !== draftGenerationRef.current) {
         return
       }
 
@@ -274,20 +276,31 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       return
     }
 
+    const draftGeneration = draftGenerationRef.current
     setIsTranscribingVoice(true)
     setVoiceError(null)
 
     try {
       const result = await transcribeVoice(recording.blob, transcribeEndpoint)
+      if (draftGeneration !== draftGenerationRef.current) {
+        return
+      }
+
       const appended = appendTranscriptionToInput(result.text)
       if (!appended) {
         setVoiceError('No speech detected. Try speaking a little louder.')
       }
     } catch (error) {
+      if (draftGeneration !== draftGenerationRef.current) {
+        return
+      }
+
       const message = error instanceof Error ? error.message : 'Voice transcription failed.'
       setVoiceError(message)
     } finally {
-      setIsTranscribingVoice(false)
+      if (draftGeneration === draftGenerationRef.current) {
+        setIsTranscribingVoice(false)
+      }
     }
   }, [appendTranscriptionToInput, stopRecording, transcribeEndpoint])
 
