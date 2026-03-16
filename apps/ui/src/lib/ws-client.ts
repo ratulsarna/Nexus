@@ -825,7 +825,19 @@ export class ManagerWsClient {
         undefined,
     )
     const targetChanged = fallbackTarget !== this.state.targetAgentId
-    const nextPrimarySubscriptionAgentId = this.resolvePrimarySubscriptionAgentId(fallbackTarget, agents)
+    const preserveDirectWorkerSubscription =
+      previousDetailAgentId === null &&
+      previousSubscribedAgentId !== null &&
+      previousSubscribedAgentId === fallbackTarget &&
+      agents.some(
+        (agent) =>
+          agent.agentId === previousSubscribedAgentId &&
+          agent.role === 'worker' &&
+          (agent.status === 'idle' || agent.status === 'streaming'),
+      )
+    const nextPrimarySubscriptionAgentId = preserveDirectWorkerSubscription
+      ? previousSubscribedAgentId
+      : this.resolvePrimarySubscriptionAgentId(fallbackTarget, agents)
     const nextSubscribedAgentId =
       previousSubscribedAgentId &&
       liveAgentIds.has(previousSubscribedAgentId) &&

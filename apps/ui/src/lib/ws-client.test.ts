@@ -819,6 +819,35 @@ describe('ManagerWsClient', () => {
     client.destroy()
   })
 
+  it('preserves direct worker subscriptions after agents snapshots', () => {
+    const client = new ManagerWsClient('ws://127.0.0.1:8787', 'worker-1')
+
+    client.start()
+    vi.advanceTimersByTime(60)
+
+    const socket = FakeWebSocket.instances[0]
+    socket.emit('open')
+
+    emitServerEvent(socket, {
+      type: 'ready',
+      serverTime: new Date().toISOString(),
+      subscribedAgentId: 'worker-1',
+    })
+
+    const sentCountBeforeSnapshot = socket.sentPayloads.length
+
+    emitServerEvent(socket, {
+      type: 'agents_snapshot',
+      agents: [buildManager(), buildWorker()],
+    })
+
+    expect(client.getState().targetAgentId).toBe('worker-1')
+    expect(client.getState().subscribedAgentId).toBe('worker-1')
+    expect(socket.sentPayloads).toHaveLength(sentCountBeforeSnapshot)
+
+    client.destroy()
+  })
+
   it('sends kill_agent command when deleting a sub-agent', () => {
     const client = new ManagerWsClient('ws://127.0.0.1:8787', 'manager')
 
