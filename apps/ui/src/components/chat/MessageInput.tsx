@@ -138,6 +138,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const attachmentUploadGenerationRef = useRef(0)
 
   const {
     isRecording,
@@ -169,6 +170,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   }, [input, resizeTextarea])
 
   useEffect(() => {
+    attachmentUploadGenerationRef.current += 1
     setInput(readMessageDraft(draftKey))
     setAttachedFiles([])
     setHydratedDraftKey(draftKey ?? null)
@@ -192,7 +194,12 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     async (files: File[]) => {
       if (disabled || isRecording || files.length === 0) return
 
+      const uploadGeneration = attachmentUploadGenerationRef.current
       const uploaded = await Promise.all(files.map(fileToPendingAttachment))
+      if (uploadGeneration !== attachmentUploadGenerationRef.current) {
+        return
+      }
+
       const nextAttachments = uploaded.filter((attachment): attachment is PendingAttachment => attachment !== null)
 
       if (nextAttachments.length === 0) {

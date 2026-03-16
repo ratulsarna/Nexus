@@ -251,12 +251,12 @@ export function IndexPage() {
   }, [sidebarWidth])
 
   useEffect(() => {
-    if (state.agents.length === 0) {
+    if (!state.hasReceivedAgentsSnapshot) {
       return
     }
 
     pruneMessageDrafts(state.agents.map((agent) => agent.agentId))
-  }, [state.agents])
+  }, [state.agents, state.hasReceivedAgentsSnapshot])
 
   useEffect(() => {
     if (!activeAgentId || showInterruptActiveAgent) {

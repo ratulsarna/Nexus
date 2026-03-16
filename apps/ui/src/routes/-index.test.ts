@@ -807,6 +807,15 @@ describe('IndexPage create manager model selection', () => {
     await vi.waitFor(() => {
       expect(readDraftStorage()).toEqual({ manager: 'draft for manager' })
     })
+
+    emitServerEvent(refreshedSocket, {
+      type: 'agents_snapshot',
+      agents: [],
+    })
+
+    await vi.waitFor(() => {
+      expect(readDraftStorage()).toEqual({})
+    })
   })
 
   it('restores and persists desktop sidebar width', async () => {
