@@ -1189,6 +1189,56 @@ describe('ManagerWsClient', () => {
     client.destroy()
   })
 
+  it('marks agents snapshots as authoritative only after a real agents_snapshot event', () => {
+    const client = new ManagerWsClient('ws://127.0.0.1:8787', 'manager')
+
+    client.start()
+    vi.advanceTimersByTime(60)
+
+    const socket = FakeWebSocket.instances[0]
+    socket.emit('open')
+
+    emitServerEvent(socket, {
+      type: 'ready',
+      serverTime: new Date().toISOString(),
+      subscribedAgentId: 'manager',
+    })
+
+    expect(client.getState().hasReceivedAgentsSnapshot).toBe(false)
+
+    emitServerEvent(socket, {
+      type: 'manager_created',
+      requestId: 'req-1',
+      manager: {
+        agentId: 'release-manager',
+        managerId: 'manager',
+        displayName: 'Release Manager',
+        role: 'manager',
+        status: 'idle',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        cwd: '/tmp/release',
+        model: {
+          provider: 'openai-codex',
+          modelId: 'gpt-5.3-codex',
+          thinkingLevel: 'high',
+        },
+        sessionFile: '/tmp/release-manager.jsonl',
+      },
+    })
+
+    expect(client.getState().hasReceivedAgentsSnapshot).toBe(false)
+
+    emitServerEvent(socket, {
+      type: 'agents_snapshot',
+      agents: [buildManager()],
+    })
+
+    expect(client.getState().hasReceivedAgentsSnapshot).toBe(true)
+
+    client.destroy()
+  })
+
   it('sends update_manager with explicit fields and resolves manager_updated metadata', async () => {
     const client = new ManagerWsClient('ws://127.0.0.1:8787', 'manager')
 
