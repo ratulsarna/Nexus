@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createRef } from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fileToPendingAttachment } from '@/lib/file-attachments'
 import { transcribeVoice } from '@/lib/voice-transcription-client'
@@ -84,6 +84,7 @@ describe('MessageInput', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    cleanup()
   })
 
   it('clears attached files when the draft key changes', async () => {
@@ -195,10 +196,10 @@ describe('MessageInput', () => {
       />,
     )
 
-    const stopRecordingButton = await screen.findByRole('button', {
+    const stopRecordingButtons = await screen.findAllByRole('button', {
       name: 'Stop recording and transcribe',
     })
-    stopRecordingButton.click()
+    stopRecordingButtons[0]?.click()
 
     rerender(
       <MessageInput
@@ -214,6 +215,53 @@ describe('MessageInput', () => {
     pendingTranscription.resolve({ text: 'late transcript' })
     await pendingTranscription.promise
 
+    await waitFor(() => {
+      expect(screen.queryByDisplayValue('late transcript')).toBeNull()
+    })
+  })
+
+  it('ignores recordings that finish stopping after the draft key changes', async () => {
+    const pendingStop = deferred<{ blob: Blob; mimeType: string; durationMs: number } | null>()
+    mockVoiceRecorderState.isRecording = true
+    mockStopRecording.mockReturnValueOnce(pendingStop.promise)
+
+    const ref = createRef<MessageInputHandle>()
+    const onSend = vi.fn()
+    const { rerender } = render(
+      <MessageInput
+        ref={ref}
+        onSend={onSend}
+        isLoading={false}
+        agentLabel="manager"
+        draftKey="manager"
+        wsUrl="ws://127.0.0.1:47187"
+      />,
+    )
+
+    const stopRecordingButtons = await screen.findAllByRole('button', {
+      name: 'Stop recording and transcribe',
+    })
+    stopRecordingButtons[0]?.click()
+
+    rerender(
+      <MessageInput
+        ref={ref}
+        onSend={onSend}
+        isLoading={false}
+        agentLabel="worker"
+        draftKey="worker"
+        wsUrl="ws://127.0.0.1:47187"
+      />,
+    )
+
+    pendingStop.resolve({
+      blob: new Blob(['voice'], { type: 'audio/webm' }),
+      mimeType: 'audio/webm',
+      durationMs: 1000,
+    })
+    await pendingStop.promise
+
+    expect(transcribeVoice).not.toHaveBeenCalled()
     await waitFor(() => {
       expect(screen.queryByDisplayValue('late transcript')).toBeNull()
     })

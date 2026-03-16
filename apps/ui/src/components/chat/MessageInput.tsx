@@ -138,7 +138,14 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const normalizedDraftKey = draftKey ?? null
   const draftGenerationRef = useRef(0)
+  const previousDraftKeyRef = useRef<string | null>(normalizedDraftKey)
+
+  if (previousDraftKeyRef.current !== normalizedDraftKey) {
+    previousDraftKeyRef.current = normalizedDraftKey
+    draftGenerationRef.current += 1
+  }
 
   const {
     isRecording,
@@ -170,21 +177,20 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   }, [input, resizeTextarea])
 
   useEffect(() => {
-    draftGenerationRef.current += 1
-    setInput(readMessageDraft(draftKey))
+    setInput(readMessageDraft(normalizedDraftKey))
     setAttachedFiles([])
     setIsTranscribingVoice(false)
     setVoiceError(null)
-    setHydratedDraftKey(draftKey ?? null)
-  }, [draftKey])
+    setHydratedDraftKey(normalizedDraftKey)
+  }, [normalizedDraftKey])
 
   useEffect(() => {
-    if (draftKey !== hydratedDraftKey) {
+    if (normalizedDraftKey !== hydratedDraftKey) {
       return
     }
 
-    writeMessageDraft(draftKey, input)
-  }, [draftKey, hydratedDraftKey, input])
+    writeMessageDraft(normalizedDraftKey, input)
+  }, [hydratedDraftKey, input, normalizedDraftKey])
 
   useEffect(() => {
     if (!disabled && !blockedByLoading && !isRecording) {
@@ -270,13 +276,17 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   }, [])
 
   const stopAndTranscribeRecording = useCallback(async () => {
+    const draftGeneration = draftGenerationRef.current
     const recording = await stopRecording()
+    if (draftGeneration !== draftGenerationRef.current) {
+      return
+    }
+
     if (!recording) {
       setVoiceError('Recording failed. Could not capture audio. Please try again.')
       return
     }
 
-    const draftGeneration = draftGenerationRef.current
     setIsTranscribingVoice(true)
     setVoiceError(null)
 
@@ -388,8 +398,17 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
 
     setInput('')
     setAttachedFiles([])
-    writeMessageDraft(draftKey, '')
-  }, [attachedFiles, blockedByLoading, disabled, draftKey, input, isRecording, isTranscribingVoice, onSend])
+    writeMessageDraft(normalizedDraftKey, '')
+  }, [
+    attachedFiles,
+    blockedByLoading,
+    disabled,
+    input,
+    isRecording,
+    isTranscribingVoice,
+    normalizedDraftKey,
+    onSend,
+  ])
 
   const handleSubmit = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
