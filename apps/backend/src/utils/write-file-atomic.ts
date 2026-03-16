@@ -6,9 +6,9 @@ export async function writeFileAtomic(targetPath: string, contents: string): Pro
   await mkdir(dirname(targetPath), { recursive: true });
 
   const tempPath = resolve(dirname(targetPath), `.${basename(targetPath)}.${randomUUID()}.tmp`);
-  await writeFile(tempPath, contents, "utf8");
 
   try {
+    await writeFile(tempPath, contents, "utf8");
     await rename(tempPath, targetPath);
   } catch (error) {
     await unlink(tempPath).catch(() => {});
