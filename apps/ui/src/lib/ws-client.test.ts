@@ -1370,6 +1370,114 @@ describe('ManagerWsClient', () => {
     client.destroy()
   })
 
+  it('resubscribes to the fallback manager when the current manager becomes hidden', () => {
+    const client = new ManagerWsClient('ws://127.0.0.1:8787', 'manager')
+
+    client.start()
+    vi.advanceTimersByTime(60)
+
+    const socket = FakeWebSocket.instances[0]
+    socket.emit('open')
+
+    emitServerEvent(socket, {
+      type: 'ready',
+      serverTime: new Date().toISOString(),
+      subscribedAgentId: 'manager-2',
+    })
+
+    emitServerEvent(socket, {
+      type: 'agents_snapshot',
+      agents: [
+        {
+          agentId: 'manager',
+          managerId: 'manager',
+          displayName: 'Primary Manager',
+          role: 'manager',
+          status: 'idle',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          cwd: '/tmp',
+          model: {
+            provider: 'openai-codex',
+            modelId: 'gpt-5.3-codex',
+            thinkingLevel: 'medium',
+          },
+          sessionFile: '/tmp/manager.jsonl',
+        },
+        {
+          agentId: 'manager-2',
+          managerId: 'manager',
+          displayName: 'Manager 2',
+          role: 'manager',
+          status: 'idle',
+          createdAt: '2026-01-01T00:01:00.000Z',
+          updatedAt: '2026-01-01T00:01:00.000Z',
+          cwd: '/tmp/secondary',
+          model: {
+            provider: 'openai-codex',
+            modelId: 'gpt-5.3-codex',
+            thinkingLevel: 'medium',
+          },
+          sessionFile: '/tmp/manager-2.jsonl',
+        },
+      ],
+    })
+
+    const sentCountBeforeFallback = socket.sentPayloads.length
+
+    emitServerEvent(socket, {
+      type: 'agents_snapshot',
+      agents: [
+        {
+          agentId: 'manager',
+          managerId: 'manager',
+          displayName: 'Primary Manager',
+          role: 'manager',
+          status: 'idle',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          cwd: '/tmp',
+          model: {
+            provider: 'openai-codex',
+            modelId: 'gpt-5.3-codex',
+            thinkingLevel: 'medium',
+          },
+          sessionFile: '/tmp/manager.jsonl',
+        },
+        {
+          agentId: 'manager-2',
+          managerId: 'manager',
+          displayName: 'Manager 2',
+          role: 'manager',
+          status: 'error',
+          createdAt: '2026-01-01T00:01:00.000Z',
+          updatedAt: '2026-01-01T00:01:00.000Z',
+          cwd: '/tmp/secondary',
+          model: {
+            provider: 'openai-codex',
+            modelId: 'gpt-5.3-codex',
+            thinkingLevel: 'medium',
+          },
+          sessionFile: '/tmp/manager-2.jsonl',
+        },
+      ],
+    })
+
+    expect(client.getState().targetAgentId).toBe('manager')
+    expect(client.getState().subscribedAgentId).toBe('manager')
+
+    const fallbackPayloads = socket.sentPayloads
+      .slice(sentCountBeforeFallback)
+      .map((payload) => JSON.parse(payload))
+
+    expect(fallbackPayloads).toContainEqual({
+      type: 'subscribe',
+      agentId: 'manager',
+    })
+
+    client.destroy()
+  })
+
   it('clears selection when the last manager is deleted and blocks sends until a new agent exists', () => {
     const client = new ManagerWsClient('ws://127.0.0.1:8787', 'manager')
 

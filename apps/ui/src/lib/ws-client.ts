@@ -819,7 +819,9 @@ export class ManagerWsClient {
     const targetChanged = fallbackTarget !== this.state.targetAgentId
     const nextPrimarySubscriptionAgentId = this.resolvePrimarySubscriptionAgentId(fallbackTarget, agents)
     const nextSubscribedAgentId =
-      previousSubscribedAgentId && liveAgentIds.has(previousSubscribedAgentId)
+      previousSubscribedAgentId &&
+      liveAgentIds.has(previousSubscribedAgentId) &&
+      previousSubscribedAgentId === nextPrimarySubscriptionAgentId
         ? previousSubscribedAgentId
         : nextPrimarySubscriptionAgentId
 
