@@ -131,6 +131,19 @@ export class WsHandler {
     }
 
     if (command.type === "subscribe_agent_detail") {
+      const subscribedAgentId = this.resolveSubscribedAgentId(socket);
+      if (!subscribedAgentId) {
+        this.logDebug("command:rejected:not_subscribed", {
+          type: command.type
+        });
+        this.send(socket, {
+          type: "error",
+          code: "NOT_SUBSCRIBED",
+          message: `Send subscribe before ${command.type}.`,
+        });
+        return;
+      }
+
       this.handleSubscribeAgentDetail(socket, command.agentId);
       return;
     }
@@ -321,6 +334,14 @@ export class WsHandler {
   }
 
   private sendSubscriptionBootstrap(socket: WebSocket, targetAgentId: string): void {
+    const targetDescriptor = this.swarmManager.getAgent(targetAgentId);
+    const bootstrapMessages =
+      targetDescriptor?.role === "worker"
+        ? this.swarmManager.getConversationHistory(targetAgentId)
+        : this.swarmManager.getVisibleTranscript(targetAgentId, {
+            limit: BOOTSTRAP_HISTORY_LIMIT
+          });
+
     this.send(socket, {
       type: "ready",
       serverTime: new Date().toISOString(),
@@ -333,9 +354,7 @@ export class WsHandler {
     this.send(socket, {
       type: "conversation_history",
       agentId: targetAgentId,
-      messages: this.swarmManager.getVisibleTranscript(targetAgentId, {
-        limit: BOOTSTRAP_HISTORY_LIMIT
-      })
+      messages: bootstrapMessages
     });
 
     const managerContextId = this.resolveManagerContextAgentId(targetAgentId);

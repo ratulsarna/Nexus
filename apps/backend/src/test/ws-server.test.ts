@@ -1549,6 +1549,107 @@ describe('SwarmWebSocketServer', () => {
     await server.stop()
   })
 
+  it('rejects worker detail subscription before the primary subscribe handshake', async () => {
+    const port = await getAvailablePort()
+    const config = await makeTempConfig(port)
+
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+
+    const worker = await manager.spawnAgent('manager', { agentId: 'Worker Detail' })
+    const server = new SwarmWebSocketServer({
+      swarmManager: manager,
+      host: config.host,
+      port: config.port,
+      allowNonManagerSubscriptions: config.allowNonManagerSubscriptions,
+    })
+
+    await server.start()
+
+    const client = new WebSocket(`ws://${config.host}:${config.port}`)
+    const events: ServerEvent[] = []
+    client.on('message', (raw) => {
+      events.push(JSON.parse(raw.toString()) as ServerEvent)
+    })
+
+    await once(client, 'open')
+    client.send(JSON.stringify({ type: 'subscribe_agent_detail', agentId: worker.agentId }))
+
+    const errorEvent = await waitForEvent(
+      events,
+      (event) => event.type === 'error' && event.code === 'NOT_SUBSCRIBED',
+    )
+    expect(errorEvent.type).toBe('error')
+
+    client.close()
+    await once(client, 'close')
+    await server.stop()
+  })
+
+  it('keeps worker assistant replies in bootstrap history for direct worker subscriptions', async () => {
+    const port = await getAvailablePort()
+    const config = await makeTempConfig(port, true)
+
+    const manager = new TestSwarmManager(config)
+    await bootWithDefaultManager(manager, config)
+    const worker = await manager.spawnAgent('manager', { agentId: 'Worker Detail' })
+
+    ;(manager as any).conversationProjector.emitConversationMessage({
+      type: 'conversation_message',
+      agentId: worker.agentId,
+      role: 'user',
+      text: 'hello worker',
+      timestamp: new Date().toISOString(),
+      source: 'user_input',
+    })
+    ;(manager as any).conversationProjector.emitConversationMessage({
+      type: 'conversation_message',
+      agentId: worker.agentId,
+      role: 'assistant',
+      text: 'worker reply',
+      timestamp: new Date().toISOString(),
+      source: 'system',
+    })
+
+    const server = new SwarmWebSocketServer({
+      swarmManager: manager,
+      host: config.host,
+      port: config.port,
+      allowNonManagerSubscriptions: config.allowNonManagerSubscriptions,
+    })
+
+    await server.start()
+
+    const client = new WebSocket(`ws://${config.host}:${config.port}`)
+    const events: ServerEvent[] = []
+    client.on('message', (raw) => {
+      events.push(JSON.parse(raw.toString()) as ServerEvent)
+    })
+
+    await once(client, 'open')
+    client.send(JSON.stringify({ type: 'subscribe', agentId: worker.agentId }))
+
+    const historyEvent = await waitForEvent(
+      events,
+      (event) => event.type === 'conversation_history' && event.agentId === worker.agentId,
+    )
+    expect(historyEvent.type).toBe('conversation_history')
+    if (historyEvent.type === 'conversation_history') {
+      expect(
+        historyEvent.messages.some(
+          (entry) =>
+            entry.type === 'conversation_message' &&
+            entry.role === 'assistant' &&
+            entry.text === 'worker reply',
+        ),
+      ).toBe(true)
+    }
+
+    client.close()
+    await once(client, 'close')
+    await server.stop()
+  })
+
   it('kills a worker via kill_agent command and emits updated status + snapshot events', async () => {
     const port = await getAvailablePort()
     const config = await makeTempConfig(port, true)

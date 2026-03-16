@@ -297,6 +297,63 @@ describe('ManagerWsClient', () => {
     client.destroy()
   })
 
+  it('drops stale worker detail subscriptions when the worker becomes hidden', () => {
+    const client = new ManagerWsClient('ws://127.0.0.1:8787')
+
+    client.start()
+    vi.advanceTimersByTime(60)
+
+    const socket = FakeWebSocket.instances[0]
+    socket.emit('open')
+
+    emitServerEvent(socket, {
+      type: 'ready',
+      serverTime: new Date().toISOString(),
+      subscribedAgentId: 'manager',
+    })
+    emitServerEvent(socket, {
+      type: 'agents_snapshot',
+      agents: [buildManager(), buildWorker()],
+    })
+
+    client.subscribeToAgent('worker-1')
+
+    emitServerEvent(socket, {
+      type: 'agents_snapshot',
+      agents: [
+        buildManager(),
+        {
+          ...buildWorker(),
+          status: 'error',
+        },
+      ],
+    })
+
+    expect(client.getState().targetAgentId).toBe('manager')
+
+    socket.close()
+    vi.advanceTimersByTime(1200)
+
+    const reconnectedSocket = FakeWebSocket.instances[1]
+    reconnectedSocket.emit('open')
+
+    expect(JSON.parse(reconnectedSocket.sentPayloads[0] ?? '')).toEqual({
+      type: 'subscribe',
+      agentId: 'manager',
+    })
+    expect(reconnectedSocket.sentPayloads).toHaveLength(1)
+
+    emitServerEvent(reconnectedSocket, {
+      type: 'ready',
+      serverTime: new Date().toISOString(),
+      subscribedAgentId: 'manager',
+    })
+
+    expect(client.getState().targetAgentId).toBe('manager')
+
+    client.destroy()
+  })
+
   it('stores slack_status events from the backend', () => {
     const client = new ManagerWsClient('ws://127.0.0.1:8787', 'manager')
 

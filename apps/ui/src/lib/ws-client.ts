@@ -787,7 +787,15 @@ export class ManagerWsClient {
   private applyAgentsSnapshot(agents: AgentDescriptor[]): void {
     const liveAgentIds = new Set(agents.map((agent) => agent.agentId))
     const previousSubscribedAgentId = this.state.subscribedAgentId
-    if (this.desiredDetailAgentId && !liveAgentIds.has(this.desiredDetailAgentId)) {
+    if (
+      this.desiredDetailAgentId &&
+      !agents.some(
+        (agent) =>
+          agent.agentId === this.desiredDetailAgentId &&
+          agent.role === 'worker' &&
+          (agent.status === 'idle' || agent.status === 'streaming'),
+      )
+    ) {
       this.desiredDetailAgentId = null
     }
     const statuses = Object.fromEntries(
