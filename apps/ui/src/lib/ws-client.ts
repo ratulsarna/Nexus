@@ -787,17 +787,17 @@ export class ManagerWsClient {
   private applyAgentsSnapshot(agents: AgentDescriptor[]): void {
     const liveAgentIds = new Set(agents.map((agent) => agent.agentId))
     const previousSubscribedAgentId = this.state.subscribedAgentId
-    if (
-      this.desiredDetailAgentId &&
-      !agents.some(
+    const previousDetailAgentId = this.desiredDetailAgentId
+    const nextDetailAgentId =
+      previousDetailAgentId &&
+      agents.some(
         (agent) =>
-          agent.agentId === this.desiredDetailAgentId &&
+          agent.agentId === previousDetailAgentId &&
           agent.role === 'worker' &&
           (agent.status === 'idle' || agent.status === 'streaming'),
       )
-    ) {
-      this.desiredDetailAgentId = null
-    }
+        ? previousDetailAgentId
+        : null
     const statuses = Object.fromEntries(
       agents.map((agent) => {
         const previous = this.state.statuses[agent.agentId]
@@ -818,7 +818,7 @@ export class ManagerWsClient {
 
     const fallbackTarget = chooseFallbackAgentId(
       agents,
-      this.desiredDetailAgentId ??
+      nextDetailAgentId ??
         this.state.targetAgentId ??
         this.state.subscribedAgentId ??
         this.desiredAgentId ??
@@ -852,9 +852,19 @@ export class ManagerWsClient {
 
     this.updateState(patch)
 
+    if (nextDetailAgentId !== previousDetailAgentId) {
+      this.syncDetailSubscription(nextDetailAgentId)
+    }
+
     if (
       nextSubscribedAgentId &&
-      nextSubscribedAgentId !== previousSubscribedAgentId &&
+      (
+        nextSubscribedAgentId !== previousSubscribedAgentId ||
+        (targetChanged &&
+          previousDetailAgentId !== null &&
+          nextDetailAgentId === null &&
+          nextSubscribedAgentId === previousSubscribedAgentId)
+      ) &&
       this.socket?.readyState === WebSocket.OPEN
     ) {
       this.send({

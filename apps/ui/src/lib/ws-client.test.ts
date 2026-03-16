@@ -317,6 +317,7 @@ describe('ManagerWsClient', () => {
     })
 
     client.subscribeToAgent('worker-1')
+    const fallbackStart = socket.sentPayloads.length
 
     emitServerEvent(socket, {
       type: 'agents_snapshot',
@@ -330,6 +331,19 @@ describe('ManagerWsClient', () => {
     })
 
     expect(client.getState().targetAgentId).toBe('manager')
+
+    const fallbackPayloads = socket.sentPayloads
+      .slice(fallbackStart)
+      .map((payload) => JSON.parse(payload))
+
+    expect(fallbackPayloads).toContainEqual({
+      type: 'unsubscribe_agent_detail',
+      agentId: 'worker-1',
+    })
+    expect(fallbackPayloads).toContainEqual({
+      type: 'subscribe',
+      agentId: 'manager',
+    })
 
     socket.close()
     vi.advanceTimersByTime(1200)
