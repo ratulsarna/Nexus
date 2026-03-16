@@ -786,6 +786,7 @@ export class ManagerWsClient {
 
   private applyAgentsSnapshot(agents: AgentDescriptor[]): void {
     const liveAgentIds = new Set(agents.map((agent) => agent.agentId))
+    const previousSubscribedAgentId = this.state.subscribedAgentId
     if (this.desiredDetailAgentId && !liveAgentIds.has(this.desiredDetailAgentId)) {
       this.desiredDetailAgentId = null
     }
@@ -818,8 +819,8 @@ export class ManagerWsClient {
     const targetChanged = fallbackTarget !== this.state.targetAgentId
     const nextPrimarySubscriptionAgentId = this.resolvePrimarySubscriptionAgentId(fallbackTarget, agents)
     const nextSubscribedAgentId =
-      this.state.subscribedAgentId && liveAgentIds.has(this.state.subscribedAgentId)
-        ? this.state.subscribedAgentId
+      previousSubscribedAgentId && liveAgentIds.has(previousSubscribedAgentId)
+        ? previousSubscribedAgentId
         : nextPrimarySubscriptionAgentId
 
     const patch: Partial<ManagerWsState> = {
@@ -833,7 +834,7 @@ export class ManagerWsClient {
       patch.activityMessages = []
     }
 
-    if (nextSubscribedAgentId !== this.state.subscribedAgentId) {
+    if (nextSubscribedAgentId !== previousSubscribedAgentId) {
       patch.subscribedAgentId = nextSubscribedAgentId
     }
 
@@ -843,7 +844,7 @@ export class ManagerWsClient {
 
     if (
       nextSubscribedAgentId &&
-      nextSubscribedAgentId !== this.state.subscribedAgentId &&
+      nextSubscribedAgentId !== previousSubscribedAgentId &&
       this.socket?.readyState === WebSocket.OPEN
     ) {
       this.send({
