@@ -71,6 +71,54 @@ function makeHost(spawnImpl: (callerAgentId: string, input: SpawnAgentInput) => 
 }
 
 describe('buildSwarmTools', () => {
+  it('lists manager entries for cross-manager discovery', async () => {
+    const secondaryManager: AgentDescriptor = {
+      ...makeManagerDescriptor(),
+      agentId: 'manager-two',
+      displayName: 'manager-two',
+      managerId: 'manager-two',
+      sessionFile: '/tmp/swarm/manager-two.jsonl',
+    }
+
+    const host: SwarmToolHost = {
+      listAgents: () => [makeManagerDescriptor(), secondaryManager, makeWorkerDescriptor('worker-a')],
+      spawnAgent: async () => makeWorkerDescriptor('worker'),
+      interruptAgent: async (_callerAgentId, targetAgentId) => ({
+        agentId: targetAgentId,
+        managerId: 'manager',
+        interrupted: true,
+      }),
+      killAgent: async () => {},
+      sendMessage: async () => ({
+        targetAgentId: 'worker',
+        deliveryId: 'delivery-1',
+        acceptedMode: 'prompt',
+      }),
+      publishToUser: async () => ({
+        targetContext: { channel: 'web' as const },
+      }),
+    }
+
+    const tools = buildSwarmTools(host, makeManagerDescriptor())
+    const listAgentsTool = tools.find((tool) => tool.name === 'list_agents')
+    expect(listAgentsTool).toBeDefined()
+    expect(listAgentsTool?.description).toContain('Manager entries are included')
+
+    const result = await listAgentsTool!.execute(
+      'tool-call',
+      {},
+      undefined,
+      undefined,
+      undefined as any,
+    )
+
+    const agents = (result.details as { agents: AgentDescriptor[] }).agents
+    expect(agents.filter((agent) => agent.role === 'manager').map((agent) => agent.agentId)).toEqual([
+      'manager',
+      'manager-two',
+    ])
+  })
+
   it('propagates spawn_agent model preset to host.spawnAgent', async () => {
     let receivedInput: SpawnAgentInput | undefined
 

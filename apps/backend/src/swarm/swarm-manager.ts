@@ -355,6 +355,15 @@ export class SwarmManager extends EventEmitter implements SwarmToolHost {
     return this.conversationProjector.getConversationHistory(resolvedAgentId);
   }
 
+  getVisibleTranscript(agentId?: string, options?: { limit?: number }): ConversationMessageEvent[] {
+    const resolvedAgentId = normalizeOptionalAgentId(agentId) ?? this.resolvePreferredManagerId();
+    if (!resolvedAgentId) {
+      return [];
+    }
+
+    return this.conversationProjector.getVisibleTranscript(resolvedAgentId, options?.limit);
+  }
+
   async spawnAgent(callerAgentId: string, input: SpawnAgentInput): Promise<AgentDescriptor> {
     const manager = this.assertManager(callerAgentId, "spawn agents");
 

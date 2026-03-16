@@ -20,6 +20,7 @@ import {
   type PendingAttachment,
 } from '@/lib/file-attachments'
 import { resolveApiEndpoint } from '@/lib/api-endpoint'
+import { readMessageDraft, writeMessageDraft } from '@/lib/message-drafts'
 import { transcribeVoice } from '@/lib/voice-transcription-client'
 import { cn } from '@/lib/utils'
 import type { AgentDescriptor, ConversationAttachment, ThinkingLevel } from '@nexus/protocol'
@@ -44,6 +45,7 @@ interface MessageInputProps {
   catalog?: CreateManagerCatalog | null
   onModelChange?: (modelId: string) => void
   onThinkingLevelChange?: (thinkingLevel: ThinkingLevel) => void
+  draftKey?: string | null
 }
 
 export interface MessageInputHandle {
@@ -124,16 +126,26 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     catalog,
     onModelChange,
     onThinkingLevelChange,
+    draftKey,
   },
   ref,
 ) {
   const [input, setInput] = useState('')
+  const [hydratedDraftKey, setHydratedDraftKey] = useState<string | null>(null)
   const [attachedFiles, setAttachedFiles] = useState<PendingAttachment[]>([])
   const [isTranscribingVoice, setIsTranscribingVoice] = useState(false)
   const [voiceError, setVoiceError] = useState<string | null>(null)
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const normalizedDraftKey = draftKey ?? null
+  const draftGenerationRef = useRef(0)
+  const previousDraftKeyRef = useRef<string | null>(normalizedDraftKey)
+
+  if (previousDraftKeyRef.current !== normalizedDraftKey) {
+    previousDraftKeyRef.current = normalizedDraftKey
+    draftGenerationRef.current += 1
+  }
 
   const {
     isRecording,
@@ -165,6 +177,22 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   }, [input, resizeTextarea])
 
   useEffect(() => {
+    setInput(readMessageDraft(normalizedDraftKey))
+    setAttachedFiles([])
+    setIsTranscribingVoice(false)
+    setVoiceError(null)
+    setHydratedDraftKey(normalizedDraftKey)
+  }, [normalizedDraftKey])
+
+  useEffect(() => {
+    if (normalizedDraftKey !== hydratedDraftKey) {
+      return
+    }
+
+    writeMessageDraft(normalizedDraftKey, input)
+  }, [hydratedDraftKey, input, normalizedDraftKey])
+
+  useEffect(() => {
     if (!disabled && !blockedByLoading && !isRecording) {
       textareaRef.current?.focus()
     }
@@ -174,7 +202,12 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     async (files: File[]) => {
       if (disabled || isRecording || files.length === 0) return
 
+      const uploadGeneration = draftGenerationRef.current
       const uploaded = await Promise.all(files.map(fileToPendingAttachment))
+      if (uploadGeneration !== draftGenerationRef.current) {
+        return
+      }
+
       const nextAttachments = uploaded.filter((attachment): attachment is PendingAttachment => attachment !== null)
 
       if (nextAttachments.length === 0) {
@@ -243,7 +276,12 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   }, [])
 
   const stopAndTranscribeRecording = useCallback(async () => {
+    const draftGeneration = draftGenerationRef.current
     const recording = await stopRecording()
+    if (draftGeneration !== draftGenerationRef.current) {
+      return
+    }
+
     if (!recording) {
       setVoiceError('Recording failed. Could not capture audio. Please try again.')
       return
@@ -254,15 +292,25 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
 
     try {
       const result = await transcribeVoice(recording.blob, transcribeEndpoint)
+      if (draftGeneration !== draftGenerationRef.current) {
+        return
+      }
+
       const appended = appendTranscriptionToInput(result.text)
       if (!appended) {
         setVoiceError('No speech detected. Try speaking a little louder.')
       }
     } catch (error) {
+      if (draftGeneration !== draftGenerationRef.current) {
+        return
+      }
+
       const message = error instanceof Error ? error.message : 'Voice transcription failed.'
       setVoiceError(message)
     } finally {
-      setIsTranscribingVoice(false)
+      if (draftGeneration === draftGenerationRef.current) {
+        setIsTranscribingVoice(false)
+      }
     }
   }, [appendTranscriptionToInput, stopRecording, transcribeEndpoint])
 
@@ -350,7 +398,17 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
 
     setInput('')
     setAttachedFiles([])
-  }, [attachedFiles, blockedByLoading, disabled, input, isRecording, isTranscribingVoice, onSend])
+    writeMessageDraft(normalizedDraftKey, '')
+  }, [
+    attachedFiles,
+    blockedByLoading,
+    disabled,
+    input,
+    isRecording,
+    isTranscribingVoice,
+    normalizedDraftKey,
+    onSend,
+  ])
 
   const handleSubmit = useCallback(
     (event: FormEvent<HTMLFormElement>) => {

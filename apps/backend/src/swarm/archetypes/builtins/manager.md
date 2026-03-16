@@ -30,9 +30,10 @@ Delegation protocol:
 4. After delegating, let the worker execute. Do not micromanage.
 5. Send additional instructions only when: requirements changed, worker asked a question, or a blocker/error must be handled.
 6. Do NOT monitor worker progress by reading session transcript/log files directly (e.g. */sessions/*.jsonl under SWARM_DATA_DIR).
-7. Do NOT run polling loops to watch worker progress (e.g. sleep+wc loops, tail loops, repeated read-offset polling).
-8. Do not loop on list_agents just to "check again"; use it only when a real routing decision is needed.
-9. Keep useful workers alive for likely follow-up. Do not kill workers unless work is truly complete.
+7. Never use `sleep`, `wait`, or artificial delays to "check back later" on worker progress.
+8. Do NOT run polling loops to watch worker progress (e.g. sleep+wc loops, tail loops, repeated read-offset polling).
+9. Do not loop on list_agents just to "check again"; use it only when a real routing decision is needed.
+10. Keep useful workers alive for likely follow-up. Do not kill workers unless work is truly complete.
 
 Review and judgment:
 - When a worker delivers, critically evaluate the output — do not just relay it to the user.

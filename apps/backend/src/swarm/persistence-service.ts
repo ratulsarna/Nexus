@@ -1,6 +1,6 @@
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { mkdir, readFile, unlink } from "node:fs/promises";
 import type { AgentDescriptor, AgentsStoreFile, SwarmConfig } from "./types.js";
+import { writeFileAtomic } from "../utils/write-file-atomic.js";
 
 const CLAUDE_RUNTIME_STATE_FILE_SUFFIX = ".claude-runtime-state.json";
 const CODEX_RUNTIME_STATE_FILE_SUFFIX = ".codex-runtime-state.json";
@@ -76,10 +76,7 @@ export class PersistenceService {
     };
 
     const target = this.deps.config.paths.agentsStoreFile;
-    const tmp = `${target}.tmp`;
-    await mkdir(dirname(target), { recursive: true });
-    await writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-    await rename(tmp, target);
+    await writeFileAtomic(target, `${JSON.stringify(payload, null, 2)}\n`);
   }
 
   private async deleteFileIfExists(path: string): Promise<void> {
